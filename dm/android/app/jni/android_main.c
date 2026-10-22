@@ -39,8 +39,10 @@ void *front_metal_layer(void) { return atomic_load(&g_window); }   // the window
 void *front_android_window(void) { return atomic_load(&g_window); }
 // The game's keyboard (its name entry): the app's Android dialog (app/java/com/nxnative/TextInput.java) with the phone's keyboard, on the UI thread; this game thread
 // waits for it (hle_swkbd.c stops the game's clock meanwhile). 1 OK (out holds the text, UTF-8), 0 cancelled, -1 no dialog (then the game takes it as cancelled)
+// The Java calls run on a thread of their own: the calling game thread runs on the game's stack, outside its pthread stack, and ART aborts when such a thread attaches
+// (Thread::InitStack: "FindStackTop() > GetStackEnd()"), so the game thread only starts that thread and waits for it
 extern int g_swkbd_mode, g_swkbd_numeric_max;   // hle_swkbd.c: what this request wants (numbers: the number pad)
-int front_text_input(const char *title, const char *sub, const char *guide, const char *initial, int max_chars, char *out, int out_cap) {
+static int text_input_jni(const char *title, const char *sub, const char *guide, const char *initial, int max_chars, char *out, int out_cap) {
     JavaVM *vm = g_app->activity->vm; JNIEnv *e; int attached = 0;
     if ((*vm)->GetEnv(vm, (void **)&e, JNI_VERSION_1_6) != JNI_OK) { if ((*vm)->AttachCurrentThread(vm, &e, NULL)) return -1; attached = 1; }
     int r = -1;
@@ -67,6 +69,18 @@ done:
     if (attached) (*vm)->DetachCurrentThread(vm);
     return r;
 }
+struct text_input_req { const char *title, *sub, *guide, *initial; int max_chars; char *out; int out_cap, r; };
+static void *text_input_main(void *p) {
+    struct text_input_req *q = p;
+    q->r = text_input_jni(q->title, q->sub, q->guide, q->initial, q->max_chars, q->out, q->out_cap);
+    return NULL;
+}
+int front_text_input(const char *title, const char *sub, const char *guide, const char *initial, int max_chars, char *out, int out_cap) {
+    struct text_input_req q = { title, sub, guide, initial, max_chars, out, out_cap, -1 };
+    pthread_t t; if (pthread_create(&t, NULL, text_input_main, &q)) { fprintf(stderr, "[RED] text input: no thread for the dialog\n"); return -1; }
+    pthread_join(t, NULL);
+    return q.r;
+}
 void front_save_failed(int err) { ALOG("save not written (errno %d)", err); }
 
 // ---------- Input: controllers (key and motion events of gamepads / joysticks) and touch ----------
@@ -76,8 +90,8 @@ enum { NPAD = 8 };
 static struct { int32_t dev; uint64_t btn, hat; int32_t lx, ly, rx, ry; } g_pads[NPAD];
 static uint64_t g_pad_btn; static int32_t g_pad_lx, g_pad_ly, g_pad_rx, g_pad_ry;
 static int pad_slot(int32_t dev) {
-    for (int i = 0; i < NPAD; i++) if (g_pads[i].dev == dev + 1) return i;
-    for (int i = 0; i < NPAD; i++) if (!g_pads[i].dev) { memset(&g_pads[i], 0, sizeof g_pads[i]); g_pads[i].dev = dev + 1; return i; }
+    for (int i = 0; i < NPAD; i++) if (g_pads[i].dev == dev + 2) return i;   // dev + 2: 0 marks a free slot, and the virtual keyboard's id is -1
+    for (int i = 0; i < NPAD; i++) if (!g_pads[i].dev) { memset(&g_pads[i], 0, sizeof g_pads[i]); g_pads[i].dev = dev + 2; return i; }
     return NPAD - 1;
 }
 static int32_t strongest(int32_t a, int32_t b) { return abs(b) > abs(a) ? b : a; }
@@ -246,12 +260,28 @@ void front_frame_work(uint64_t busy_ns, uint64_t target_ns) {
 // The host's front_run (main.c): the guest already runs on our big-stack host thread
 void front_run(void (*guest)(void)) { guest(); }
 
+// The system bars hidden (app/java/com/nxnative/Immersive.java), from the app's event thread (an ordinary thread, attached to Java once and kept attached)
+static void immersive(void) {
+    static JNIEnv *e; static jclass im; static jmethodID ap; static int failed;
+    if (failed) return;
+    if (!e && (*g_app->activity->vm)->AttachCurrentThread(g_app->activity->vm, &e, NULL)) { failed = 1; return; }
+    if (!im) {
+        jobject act = g_app->activity->clazz; jclass ac = (*e)->GetObjectClass(e, act);
+        jobject cl = (*e)->CallObjectMethod(e, act, (*e)->GetMethodID(e, ac, "getClassLoader", "()Ljava/lang/ClassLoader;"));
+        jclass clc = (*e)->FindClass(e, "java/lang/ClassLoader"); jstring cn = (*e)->NewStringUTF(e, "com.nxnative.Immersive");
+        jclass c = (jclass)(*e)->CallObjectMethod(e, cl, (*e)->GetMethodID(e, clc, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;"), cn);
+        if ((*e)->ExceptionCheck(e) || !c) { (*e)->ExceptionClear(e); failed = 1; fprintf(stderr, "[RED] immersive: the class is missing\n"); return; }
+        im = (jclass)(*e)->NewGlobalRef(e, c); ap = (*e)->GetStaticMethodID(e, im, "apply", "(Landroid/app/Activity;)V");
+    }
+    (*e)->CallStaticVoidMethod(e, im, ap, g_app->activity->clazz);
+    if ((*e)->ExceptionCheck(e)) { (*e)->ExceptionDescribe(e); (*e)->ExceptionClear(e); }
+}
 __attribute__((weak)) void nvn_vk_cache_save(void);   // the pipeline cache file (nvn_vk.c), written when the app goes to the background
 static void on_cmd(struct android_app *app, int32_t cmd) {
     switch (cmd) {
-        case APP_CMD_INIT_WINDOW: atomic_store(&g_window, app->window); host_start(); break;
+        case APP_CMD_INIT_WINDOW: atomic_store(&g_window, app->window); immersive(); host_start(); break;
         case APP_CMD_TERM_WINDOW: atomic_store(&g_window, NULL); break;
-        case APP_CMD_GAINED_FOCUS: if (g_started) { dm_focus_set(1); dm_audio_suspend(0); } break;
+        case APP_CMD_GAINED_FOCUS: immersive(); if (g_started) { dm_focus_set(1); dm_audio_suspend(0); } break;
         case APP_CMD_LOST_FOCUS: if (g_started) { dm_focus_set(2); } break;
         case APP_CMD_PAUSE: if (g_started) { dm_focus_set(3); dm_audio_suspend(1); if (nvn_vk_cache_save) nvn_vk_cache_save(); } break;
         case APP_CMD_RESUME: if (g_started) { dm_focus_set(1); dm_audio_suspend(0); } break;

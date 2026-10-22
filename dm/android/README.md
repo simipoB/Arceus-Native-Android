@@ -113,3 +113,24 @@ modules mapped from the APK, boot reaches Vulkan init (the emulator's SwiftShade
 - **Text entry**: the game's keyboard requests (names, nicknames, box names; numbers get the number pad) open an Android dialog (`app/java/com/nxnative/TextInput.java`);
   the keyboard's Done key confirms. **DLC**: the Expansion Pass keys (`aoc/1`, `aoc/2`) ship in the base APK (`DM_AOC_DIR`).
 - **Without a whole-mapping driver** (the emulator): mirrored pools (`DM_VK_POOL_SHADOW`), so the real app with graphics runs in the emulator (about 3 fps in software).
+
+## Fixes on the phone (2026-10-22, built from Windows)
+- **Java from game threads**: game threads run on the game's stacks, outside their pthread stacks, and ART aborts any such thread that attaches
+  (`Thread::InitStack: FindStackTop() > GetStackEnd()`). That closed the app at the name entry (`front_text_input`) and on leaving the app (releasing the window
+  surface calls into Java). Both now run on short-lived plain threads (`android_main.c`, `nvn_vk.c` `swap_job_run`).
+- **Memory pools: the fd route** (`nvn_vk.c` `g_fdmap`). Moving Adreno's mappings onto the pools (mremap) broke on area changes and save loads: the driver hands the
+  mappings of freed allocations out again and sub-allocates small ones, so new pools landed on placeholders (crashes in `mtl_pool_add`, a lost device, the driver
+  faulting in its own code). Now each pool is a dedicated allocation exported with `VK_KHR_external_memory_fd` and that fd mapped `MAP_SHARED | MAP_FIXED` over
+  the pool's pages: zero-copy like mremap, the driver's own mapping never touched. `DM_VK_NO_FDMAP=1` brings back the mremap route (which now validates the driver's
+  mapping, moves pages back before freeing and keeps freed pool memory for reuse); `DM_VK_POOL_SHADOW=1` the mirrored route (stable but 70–230 ms submissions).
+  Loading the save, leaving and entering houses (both families'), Wedgehurst and Leon's arrival: no crash, 30 fps.
+- **Rendering**: misaligned read-only storage buffers (Adreno wants 64) bound as snapshots instead of zeros; packaged uncompressed textures get colour-attachment
+  usage (the game draws into one; it was "cannot be attached", its pass lost: Wooloo's fur came out flat).
+- **Touch**: system bars hidden (`app/java/com/nxnative/Immersive.java`; the navigation bar sat beside A / B / R and opened recents), outer controls kept ~0.2 of the
+  height off the long edges, a right stick (camera) below-left of A B X Y and a D-pad below-right of the left stick, both faint 2 s after their last touch
+  (they sit over the dialogue box). Controller device id −1 (adb's virtual keyboard) no longer dropped.
+- **Building on Windows** (no Mac): `tools/win_build_lib.py <GAME>` builds `libnxnative.so` with the Windows NDK r27c; `tools/apk_swap.py` replaces it (and
+  `classes.dex`, javac + d8 from build-tools 35) in an installed base.apk pulled with adb; then `zipalign -P 16 16384` and `apksigner --alignment-preserved`, and
+  `adb install-multiple -r -p <package> base.apk` keeps the data splits. The phone's app is signed with a key made on Windows (not the Mac's `debug.keystore`):
+  keep both machines on one key, or a Mac build needs an uninstall (copy `files/save` off first).
+- Open: one render target format still "cannot be attached" after an area change; a cube texture with 1 layer reads 0; an edge swipe can open recents and swipe the game away.

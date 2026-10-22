@@ -58,7 +58,10 @@ static VkInstance g_inst; static VkPhysicalDevice g_pd; static VkDevice g_dev; s
 static VkPhysicalDeviceProperties g_props; static VkPhysicalDeviceMemoryProperties g_memp;
 static int g_has_swapchain, g_host_import, g_clipctl, g_border, g_divisor, g_eds2, g_moltenvk;
 static VkDeviceSize g_host_align = 4096;
-static pthread_mutex_t g_qmu = PTHREAD_MUTEX_INITIALIZER;   // queue submissions come from the submit thread and the present thread
+static pthread_mutex_t g_qmu = PTHREAD_MUTEX_INITIALIZER;
+// Linux / Android pools: the driver's memory exported as a file descriptor and mapped a second time over the pool's pages (g_fdmap 1; -1 until the first pool tries it,
+// 0 when the driver has no such export or its mmap fails: then the mremap route below)
+static int g_fdmap = 0;   // queue submissions come from the submit thread and the present thread
 static PFN_vkCmdPushDescriptorSetKHR p_push;
 static int g_nopush;   // no VK_KHR_push_descriptor (the emulator's gfxstream, some phones): each draw's bindings go into a descriptor set from the submission's pools
 static PFN_vkGetMemoryHostPointerPropertiesEXT p_hostprops;
@@ -103,6 +106,10 @@ void mtl_init(void) {
     if ((g_border = has_ext(de, nde, "VK_EXT_custom_border_color"))) dext[ndext++] = "VK_EXT_custom_border_color";
     if ((g_divisor = has_ext(de, nde, "VK_EXT_vertex_attribute_divisor"))) dext[ndext++] = "VK_EXT_vertex_attribute_divisor";
     if ((g_eds2 = has_ext(de, nde, "VK_EXT_extended_dynamic_state2"))) dext[ndext++] = "VK_EXT_extended_dynamic_state2";
+#ifdef __linux__
+    if (!g_host_import && has_ext(de, nde, "VK_KHR_external_memory_fd") && !(getenv("DM_VK_NO_FDMAP") && atoi(getenv("DM_VK_NO_FDMAP")))) { dext[ndext++] = "VK_KHR_external_memory_fd"; g_fdmap = -1; }
+    VLOG("memory pools: fd export %s (host import %d, VK_KHR_external_memory_fd %d)", g_fdmap ? "to try" : "off", g_host_import, has_ext(de, nde, "VK_KHR_external_memory_fd"));
+#endif
     free(de);
     if (getenv("DM_VK_NO_HOST_IMPORT")) g_host_import = 0;
     // Every feature the device has is enabled (the translated shaders declare what they use: 64-bit integers, image formats without a type, …), robust buffer access included:
@@ -233,19 +240,42 @@ static void defer_drain(void) {
 // Three ways a pool's pages and the GPU share memory: imported host memory (VK_EXT_external_memory_host), the driver's memory moved onto the pool (mremap, needs every
 // allocation to be a whole mapping of its own: Adreno), or a mirror (shadow): the GPU buffer in the driver's memory, the game's pages unchanged, the pages the game wrote
 // copied in before each submission and what the GPU wrote copied back once it is done (drivers that sub-allocate their mappings: the Android emulator's; DM_VK_POOL_SHADOW=1)
-typedef struct { uintptr_t lo, hi, base; VkBuffer buf; VkDeviceMemory mem; VkDeviceSize size; const void *key; void *moved_from; uint8_t *shadow; uint64_t stamp; int tracked_here; } pool_ent;
+typedef struct { uintptr_t lo, hi, base; VkBuffer buf; VkDeviceMemory mem; VkDeviceSize size; const void *key; void *moved_from; uint8_t *shadow; uint64_t stamp; int tracked_here, fdmapped; } pool_ent;
 static pool_ent *g_pools; static int g_npool, g_cpool; static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static atomic_int g_nshadow;   // mirrored pools alive
 static int g_plast = -1;
 static const VkBufferUsageFlags BUF_ALL = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT
     | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+// Pool memory of the mremap route is never given back to the driver: Adreno hands the mappings of freed allocations out again, and one whose pages had been moved
+// crashed the next pool (loading a save, leaving the house in Shield) or lost the device. A freed pool's buffer and memory, its pages moved back where the driver
+// mapped them, wait here for the next pool of the same size
+#ifdef __linux__
+typedef struct { VkDeviceSize n; VkBuffer buf; VkDeviceMemory mem; void *p; } pool_mem;
+static pool_mem g_pmem[1024]; static int g_npmem; static pthread_mutex_t g_pmmu = PTHREAD_MUTEX_INITIALIZER;
+static int pool_mem_take(VkDeviceSize n, VkBuffer *buf, VkDeviceMemory *m, void **p) {
+    pthread_mutex_lock(&g_pmmu); int ok = 0;
+    for (int i = g_npmem - 1; i >= 0; i--) if (g_pmem[i].n == n) { *buf = g_pmem[i].buf; *m = g_pmem[i].mem; *p = g_pmem[i].p; g_pmem[i] = g_pmem[--g_npmem]; ok = 1; break; }
+    pthread_mutex_unlock(&g_pmmu); return ok;
+}
+static int pool_mem_put(VkDeviceSize n, VkBuffer buf, VkDeviceMemory m, void *p) {
+    pthread_mutex_lock(&g_pmmu); int ok = g_npmem < (int)(sizeof g_pmem / sizeof *g_pmem);
+    if (ok) g_pmem[g_npmem++] = (pool_mem){ n, buf, m, p };
+    pthread_mutex_unlock(&g_pmmu); return ok;
+}
+#endif
 void mtl_pool_add(const void *mem, uint64_t size) {
     mtl_init();
     uintptr_t pg = (uintptr_t)(g_host_import ? g_host_align : (VkDeviceSize)getpagesize()), lo = (uintptr_t)mem, hi = lo + size;
     uintptr_t a = lo & ~(pg - 1), b = (hi + pg - 1) & ~(pg - 1); VkDeviceSize n = b - a;
     pool_ent e = { lo, hi, a, VK_NULL_HANDLE, VK_NULL_HANDLE, n, mem, NULL, NULL, 0, 0 };
+    void *p = NULL; int reused = 0;
+#ifdef __linux__
+    static int shadow_forced = -1; if (shadow_forced < 0) shadow_forced = getenv("DM_VK_POOL_SHADOW") && atoi(getenv("DM_VK_POOL_SHADOW"));
+    if (!g_host_import && !shadow_forced && !g_fdmap && pool_mem_take(n, &e.buf, &e.mem, &p)) { reused = 1; goto reuse; }
+#endif
     VkExternalMemoryBufferCreateInfo eb = { .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO, .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT };
-    VkBufferCreateInfo bi = { .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .pNext = g_host_import ? &eb : NULL, .size = n, .usage = BUF_ALL };
+    VkExternalMemoryBufferCreateInfo ebfd = { .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO, .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT };
+    VkBufferCreateInfo bi = { .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .pNext = g_host_import ? &eb : g_fdmap ? &ebfd : NULL, .size = n, .usage = BUF_ALL };
     VKCHECK(vkCreateBuffer(g_dev, &bi, NULL, &e.buf));
     VkMemoryRequirements rq; vkGetBufferMemoryRequirements(g_dev, e.buf, &rq);
     if (g_host_import) {
@@ -261,14 +291,57 @@ void mtl_pool_add(const void *mem, uint64_t size) {
         // pointers and the GPU address the same memory. The driver's old mapping range gets a PROT_NONE placeholder, so nothing else lands where the driver believes its mapping is
         int t = mem_type(rq.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT, 0);
         if (t < 0) t = mem_type(rq.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 0);
-        VkMemoryAllocateInfo mai = { .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .allocationSize = rq.size > n ? rq.size : n, .memoryTypeIndex = (uint32_t)t };
-        VKCHECK(vkAllocateMemory(g_dev, &mai, NULL, &e.mem));
-        void *p = NULL; VKCHECK(vkMapMemory(g_dev, e.mem, 0, VK_WHOLE_SIZE, 0, &p));
+        // a dedicated allocation: a mapping of its own, never a piece of a bigger block the driver sub-allocates from (Adreno did that for small pools, 8 and 16 KB, and
+        // handed out addresses inside blocks whose pages an earlier pool had moved away: its write to the placeholder crashed, loading a save and changing areas in Shield)
+        VkMemoryDedicatedAllocateInfo ded = { .sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO, .buffer = e.buf };
+        VkMemoryAllocateInfo mai = { .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .pNext = &ded, .allocationSize = rq.size > n ? rq.size : n, .memoryTypeIndex = (uint32_t)t };
 #ifdef __linux__
-        {   // mremap moves whole mappings: the driver's must start at p, page-aligned, and cover the pool (a driver that sub-allocates from bigger mappings breaks this)
-            uintptr_t vs = 0, ve = 0; FILE *mf = fopen("/proc/self/maps", "r"); char ln[512];
-            while (mf && fgets(ln, sizeof ln, mf)) { unsigned long s0, e0; if (sscanf(ln, "%lx-%lx", &s0, &e0) == 2 && (uintptr_t)p >= s0 && (uintptr_t)p < e0) { vs = s0; ve = e0; break; } }
+        // The fd route: the driver's own mapping is never touched (moving it broke Adreno: freed mappings handed out again, crashes and a lost device on area changes);
+        // the same pages are mapped once more, shared, over the pool, so the game's pointers and the GPU still address the same memory without copies
+        if (g_fdmap) {
+            static PFN_vkGetMemoryFdKHR getfd; if (!getfd) getfd = (PFN_vkGetMemoryFdKHR)vkGetDeviceProcAddr(g_dev, "vkGetMemoryFdKHR");
+            VkExportMemoryAllocateInfo ex = { .sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO, .pNext = &ded, .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT };
+            VkMemoryAllocateInfo xai = mai; xai.pNext = &ex;
+            int fd = -1; void *tmp = MAP_FAILED;
+            if (getfd && !vkAllocateMemory(g_dev, &xai, NULL, &e.mem)) {
+                VkMemoryGetFdInfoKHR gi = { .sType = VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR, .memory = e.mem, .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT };
+                if (!getfd(g_dev, &gi, &fd) && fd >= 0) tmp = mmap(NULL, n, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+                if (tmp != MAP_FAILED) {
+                    memcpy(tmp, (void *)a, n);   // what the pool holds, into the GPU memory
+                    void *q = mmap((void *)a, n, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, 0);   // the pool's pages become the GPU memory, in one step
+                    munmap(tmp, n);
+                    if (q == (void *)a) {
+                        close(fd); e.fdmapped = 1;
+                        if (g_fdmap < 0) { g_fdmap = 1; VLOG("memory pools: the driver's memory exported (fd) and mapped over the pool's pages"); }
+                        goto bind;
+                    }
+                    if (g_fdmap > 0) VDIE("memory pool %p+%#llx: mapping the GPU memory over it failed (errno %d)", mem, (unsigned long long)size, errno);
+                }
+                if (fd >= 0) close(fd);
+                vkFreeMemory(g_dev, e.mem, NULL); e.mem = VK_NULL_HANDLE;
+            }
+            if (g_fdmap > 0) VDIE("memory pool %p+%#llx: GPU memory export failed", mem, (unsigned long long)size);
+            VLOG("memory pools: the driver's memory cannot be exported and mapped (errno %d): moving its mappings instead (mremap)", errno);
+            g_fdmap = 0;   // first pool: fall back for good (the buffer was made for export, which the plain allocation below also accepts)
+        }
+#endif
+#ifdef __linux__
+        // The mapping the driver returns must be readable and writable over the whole pool. Adreno hands out the CPU mappings of freed allocations again, and one whose
+        // pages a pool had moved away (a placeholder, or a range of the driver's that is gone) crashed the first write here (loading a save, changing areas in Shield).
+        // Such an allocation is kept aside (never freed, so it is never handed out again) and another one made
+        uintptr_t vs = 0, ve = 0;
+        for (int tries = 0;; tries++) {
+            VKCHECK(vkAllocateMemory(g_dev, &mai, NULL, &e.mem));
+            VKCHECK(vkMapMemory(g_dev, e.mem, 0, VK_WHOLE_SIZE, 0, &p));
+            int rw = 0; vs = ve = 0; FILE *mf = fopen("/proc/self/maps", "r"); char ln[512];
+            while (mf && fgets(ln, sizeof ln, mf)) { unsigned long s0, e0; char pr[8] = "";
+                if (sscanf(ln, "%lx-%lx %7s", &s0, &e0, pr) == 3 && (uintptr_t)p >= s0 && (uintptr_t)p < e0) { vs = s0; ve = e0; rw = pr[0] == 'r' && pr[1] == 'w'; break; } }
             if (mf) fclose(mf);
+            if (rw && ve >= (uintptr_t)p + n) break;
+            VLOG("[RED] memory pool %p+%#llx: the driver's mapping %p is not usable (%s): kept aside, allocating again", mem, (unsigned long long)size, p, rw ? "too short" : "not writable");
+            if (tries >= 16) VDIE("memory pool %p+%#llx: no usable GPU memory mapping after %d tries", mem, (unsigned long long)size, tries + 1);
+        }
+        {   // mremap moves whole mappings: the driver's must start at p, page-aligned, and cover the pool (a driver that sub-allocates from bigger mappings breaks this)
             static int force = -1; if (force < 0) force = getenv("DM_VK_POOL_SHADOW") && atoi(getenv("DM_VK_POOL_SHADOW"));
             if (force || ((uintptr_t)p & (getpagesize() - 1)) || vs != (uintptr_t)p || ve < (uintptr_t)p + n) {
                 static int said; if (!said++) VLOG("memory pools: %s: mirrored (pages the game writes copied in before each submission)", force ? "DM_VK_POOL_SHADOW" : "the driver's mappings are not whole mappings of their own");
@@ -279,6 +352,11 @@ void mtl_pool_add(const void *mem, uint64_t size) {
                 goto bind;
             }
         }
+#else
+        VKCHECK(vkAllocateMemory(g_dev, &mai, NULL, &e.mem)); VKCHECK(vkMapMemory(g_dev, e.mem, 0, VK_WHOLE_SIZE, 0, &p));
+#endif
+#ifdef __linux__
+reuse:
 #endif
         memcpy(p, (void *)a, n);
 #ifdef __linux__
@@ -303,7 +381,7 @@ void mtl_pool_add(const void *mem, uint64_t size) {
 #ifdef __linux__
 bind:
 #endif
-    VKCHECK(vkBindBufferMemory(g_dev, e.buf, e.mem, 0));
+    if (!reused) VKCHECK(vkBindBufferMemory(g_dev, e.buf, e.mem, 0));
     pthread_mutex_lock(&g_mu);
     if (g_npool == g_cpool) { g_cpool = g_cpool ? g_cpool * 2 : 64; g_pools = realloc(g_pools, g_cpool * sizeof *g_pools); }
     g_pools[g_npool++] = e; g_plast = -1;
@@ -320,12 +398,34 @@ void mtl_pool_del(const void *mem) {
         // all the time: 131 times in two minutes of Pokémon Shield's character creation)
         mtl_finish();
         if (e.shadow) { atomic_fetch_sub(&g_nshadow, 1); if (e.tracked_here) nvn_dirty_remove_range((void *)e.base); }
-        if (e.moved_from) {
+        if (e.fdmapped) {   // the game's pages back as ordinary memory with the same content, then a plain free (the driver's own mapping was never touched)
             void *keep = malloc(e.size); memcpy(keep, (void *)e.base, e.size);
             mmap((void *)e.base, e.size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
             memcpy((void *)e.base, keep, e.size); free(keep);
+            vkDestroyBuffer(g_dev, e.buf, NULL); vkFreeMemory(g_dev, e.mem, NULL);
+            return;
         }
-        vkDestroyBuffer(g_dev, e.buf, NULL); vkFreeMemory(g_dev, e.mem, NULL);
+        int keep_mem = 0;   // the allocation stays when its pages could not go back (the driver would hand out the placeholder again)
+        if (e.moved_from) {
+            // The driver's pages go back where the driver mapped them (over the placeholder) before the free: Adreno keeps freed allocations with their mappings and hands
+            // them out again, so a later pool's vkMapMemory returned the placeholder's address and the first write there crashed (loading a save in Pokémon Shield)
+            void *keep = malloc(e.size); memcpy(keep, (void *)e.base, e.size);
+#ifdef __linux__
+            // one protection over the whole range first: the texture tracking's write protection splits it into several mappings, and mremap moves one (EFAULT otherwise)
+            mprotect((void *)e.base, e.size, PROT_READ | PROT_WRITE);
+            void *q = mremap((void *)e.base, e.size, e.size, MREMAP_MAYMOVE | MREMAP_FIXED | MREMAP_DONTUNMAP, e.moved_from);
+            if (q != e.moved_from) q = mremap((void *)e.base, e.size, e.size, MREMAP_MAYMOVE | MREMAP_FIXED, e.moved_from);   // (then the gap below is filled at once)
+            if (q != e.moved_from) { VLOG("[RED] memory pool %p: the GPU memory could not go back to the driver (errno %d): kept, not freed", (void *)e.base, errno); keep_mem = 1; }
+            else mprotect(e.moved_from, e.size, PROT_READ | PROT_WRITE);   // pages the texture tracking had write-protected come back writable
+#endif
+            mmap((void *)e.base, e.size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+            memcpy((void *)e.base, keep, e.size); free(keep);
+        }
+#ifdef __linux__
+        if (e.moved_from && !keep_mem) { if (!pool_mem_put(e.size, e.buf, e.mem, e.moved_from)) vkDestroyBuffer(g_dev, e.buf, NULL); return; }   // kept for the next pool (full: kept aside)
+        if (e.moved_from) { vkDestroyBuffer(g_dev, e.buf, NULL); return; }   // pages not back with the driver: never freed
+#endif
+        vkDestroyBuffer(g_dev, e.buf, NULL); if (!keep_mem) vkFreeMemory(g_dev, e.mem, NULL);
         return;
     }
     pthread_mutex_unlock(&g_mu);
@@ -651,7 +751,7 @@ static vtex *tex_new(const tex_t *t, int pkg) {
     if (!x->is3d && ci.arrayLayers >= 6 && ci.extent.width == ci.extent.height && ci.samples == VK_SAMPLE_COUNT_1_BIT) { ci.flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT; x->cube_ok = 1; }
     VkFormatProperties fp; vkGetPhysicalDeviceFormatProperties(g_pd, x->fmt, &fp); VkFormatFeatureFlags ff = fp.optimalTilingFeatures;
     ci.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | (ff & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT ? VK_IMAGE_USAGE_SAMPLED_BIT : 0);
-    if (!pkg && !fmt_compressed(t->d.format)) {
+    if (!fmt_compressed(t->d.format)) {   // packaged textures too: a game may draw into one it loaded (Shield: an RGBA8 one, "cannot be attached", its pass lost)
         if (ff & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) ci.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         if (ff & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) ci.usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
     }
@@ -1619,7 +1719,11 @@ static void push_stage(vshader *s, int st, VkPipelineBindPoint bp, VkPipelineLay
                             if (want > 65536) want = 65536;   // the translated shaders declare 64 KB uniform blocks: never more to copy (MoltenVK reports a range of gigabytes)
                             uint8_t *d = arena_alloc(g_sub, want, &b, &o); memcpy(d, (const void *)(uintptr_t)addr, want); n = want;
                             RED_ONCE(29, "uniform buffer at pool offset %#llx is not %llu-aligned: bound as a snapshot", (unsigned long long)po, (unsigned long long)al);
-                        } else RED_ONCE(30, "storage buffer at pool offset %#llx is not %llu-aligned: bound to zeros", (unsigned long long)po, (unsigned long long)al);
+                        } else if (!h->rw) {   // misaligned read-only storage data (Adreno wants 64, the Switch less): a snapshot as for uniforms, not zeros
+                            VkDeviceSize m = size && size < want ? size : want; if (m > (size ? 1u << 20 : 65536u)) m = size ? 1u << 20 : 65536u;
+                            uint8_t *d = arena_alloc(g_sub, m, &b, &o); memcpy(d, (const void *)(uintptr_t)addr, m); n = m;
+                            RED_ONCE(30, "storage buffer at pool offset %#llx is not %llu-aligned: bound as a snapshot", (unsigned long long)po, (unsigned long long)al);
+                        } else RED_ONCE(32, "writable storage buffer at pool offset %#llx is not %llu-aligned: bound to zeros", (unsigned long long)po, (unsigned long long)al);
                         if (r->kind == SPV_RES_SSBO && h->rw) wb_note(addr, size ? size : (want < 65536 ? want : 65536));   // a writable storage buffer: its bound range comes back (mirrored pools)
                     } else if (h->what != W_NONE && addr) RED_ONCE(31, "stage %d %s slot %d at %#llx is in no memory pool", st, r->kind == SPV_RES_UBO ? "uniform" : "storage", h->reg, (unsigned long long)addr);
                 }
@@ -2024,15 +2128,36 @@ static void shot_ex(vtex *x, const int crop[4], const char *path, uint32_t lv, u
 void *front_metal_layer(void);
 static struct { void *win; VkSurfaceKHR surf; VkSwapchainKHR sc; VkImage img[8]; VkImageView view[8]; uint32_t n; VkFormat fmt; VkExtent2D ext; int srgb;
                 VkSemaphore acq[3], done[3]; VkFence fence[3]; VkCommandPool pool; VkCommandBuffer cb[3]; uint32_t slot; } W;
-static void swap_destroy(void) {
+// Making and dropping the window surface runs on a thread of its own: present_window runs on a game thread, whose stack is the game's (outside its pthread stack), and
+// releasing an Android surface calls into Java (BLASTBufferQueue's corner-radii callback), which attaches the calling thread; ART aborts the process when that thread's
+// stack is not its pthread stack (Thread::InitStack: "FindStackTop() > GetStackEnd()"). That was the crash on leaving the app (recents, home) and coming back
+static void swap_destroy_now(void);
+static int swap_ensure_now(void *win, int srgb);
+struct swap_job { int make; void *win; int srgb, r; };
+static void *swap_job_main(void *p) {
+    struct swap_job *j = p;
+    if (j->make) j->r = swap_ensure_now(j->win, j->srgb); else swap_destroy_now();
+    return NULL;
+}
+static int swap_job_run(int make, void *win, int srgb) {
+    struct swap_job j = { make, win, srgb, 0 }; pthread_t t;
+    if (pthread_create(&t, NULL, swap_job_main, &j)) { RED_ONCE(59, "window: no thread for the swapchain"); return 0; }
+    pthread_join(t, NULL);
+    return j.r;
+}
+static void swap_destroy(void) { if (W.sc || W.surf) swap_job_run(0, NULL, 0); W.win = NULL; }
+static int swap_ensure(void *win, int srgb) {
+    if (W.sc && W.win == win && W.srgb == srgb) return 1;
+    return swap_job_run(1, win, srgb);
+}
+static void swap_destroy_now(void) {
     if (W.sc) { vkDeviceWaitIdle(g_dev); for (uint32_t i = 0; i < W.n; i++) if (W.view[i]) { vkDestroyImageView(g_dev, W.view[i], NULL); W.view[i] = VK_NULL_HANDLE; }
                 vkDestroySwapchainKHR(g_dev, W.sc, NULL); W.sc = VK_NULL_HANDLE; }
     if (W.surf) { vkDestroySurfaceKHR(g_inst, W.surf, NULL); W.surf = VK_NULL_HANDLE; }
     W.win = NULL;
 }
-static int swap_ensure(void *win, int srgb) {
-    if (W.sc && W.win == win && W.srgb == srgb) return 1;
-    swap_destroy();
+static int swap_ensure_now(void *win, int srgb) {
+    swap_destroy_now();
 #ifdef __ANDROID__
     VkAndroidSurfaceCreateInfoKHR si = { .sType = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR, .window = (ANativeWindow *)win };
     if (vkCreateAndroidSurfaceKHR(g_inst, &si, NULL, &W.surf)) { RED_ONCE(56, "cannot create the window surface"); return 0; }

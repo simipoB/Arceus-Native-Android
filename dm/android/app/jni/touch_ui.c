@@ -2,7 +2,8 @@
 // haptic click of each press (Android's Vibrator through JNI, on a thread of its own so input never waits on it). Proportions and look after LAS Recomp's Android port
 // (runtime/ui/touch_controls.mm), in units of the screen height, landscape: glossy bubbles (shadow, dark rim, body, glow, a gloss spot, a bright rim), all the same
 // size as on the Switch; a floating stick (a compass ring that rests bottom-left and comes to where the thumb lands in the lower-left part); A B X Y in the Switch's diamond bottom-right;
-// L / R round in the top corners; − and + at the top centre. Dragging anywhere else on the right turns the camera (the right stick) and the camera follows the finger:
+// L / R round in the top corners; − and + at the top centre; a right stick below-left of the diamond, as on a right Joy-Con (the camera, pushed like the real stick).
+// Dragging anywhere else on the right turns the camera too, following the finger:
 // the stick is the finger's speed, back to rest as soon as the finger stops. A quick tap is held at least 80 ms (the game reads its input once a frame, every 33 ms);
 // touch areas are 1.3 times the drawing; a thumb sliding across the face buttons presses the one under it. Hidden while a controller is used, back on the next touch.
 // The layout and drawing parts also build into the Mac Vulkan host (mac_vk_build.sh), whose DM_OVL_SHOT composes them over a game frame to check the look.
@@ -20,7 +21,7 @@
 #include <string.h>
 #include <time.h>
 
-enum { C_STICK, C_CAM, C_A, C_B, C_X, C_Y, C_L, C_R, C_ZL, C_ZR, C_PLUS, C_MINUS, NCTL };
+enum { C_STICK, C_CAM, C_RSTICK, C_A, C_B, C_X, C_Y, C_L, C_R, C_ZL, C_ZR, C_PLUS, C_MINUS, C_UP, C_DOWN, C_LEFT, C_RIGHT, NCTL };
 typedef struct { float cx, cy, r; int glyph, shown; uint64_t btn; } ctl;
 static ctl g_c[NCTL];
 static float g_w, g_h;
@@ -29,6 +30,8 @@ static uint64_t g_btn; static int32_t g_lx, g_ly, g_rx, g_ry;
 static double g_held_until[NCTL];                   // the 80 ms minimum press
 static float g_cam_vx, g_cam_vy; static double g_cam_t;   // the camera finger's speed (pixels / s) and when it last moved
 static float g_stick_x, g_stick_y, g_knob_x, g_knob_y; static int g_stick_on;
+static float g_rknob_x, g_rknob_y; static int g_rstick_on;
+static double g_inner_t;   // the last touch of the D-pad or the right stick   // the right stick: its base stays put, the knob follows the thumb
 static int g_visible = 1;
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static double now_s(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
@@ -38,18 +41,27 @@ static void layout(float w, float h) {
     static int init; if (!init++) for (int i = 0; i < 10; i++) g_ptr[i].id = -1;   // no finger down
     if (w == g_w && h == g_h) return;
     g_w = w; g_h = h;
-    float s = h, br = 0.074f * s, gap = 0.135f * s, fx = w - 0.27f * s, fy = h - 0.30f * s, sr = 0.064f * s, mr = 0.040f * s;
+    // the outer controls keep about 0.2 of the height (~290 px on a 1440 px phone) clear of the screen's long edges, where the system's navigation buttons and edge
+    // swipes are: with the A button nearer, a thumb on it opened recents
+    float s = h, br = 0.074f * s, gap = 0.135f * s, fx = w - 0.40f * s, fy = h - 0.30f * s, sr = 0.064f * s, mr = 0.040f * s;
     g_c[C_A] = (ctl){ fx + gap, fy, br, OVL_G_A, 1, DM_BTN_A };   // the Switch's diamond, all four the same
     g_c[C_B] = (ctl){ fx, fy + gap, br, OVL_G_B, 1, DM_BTN_B };
     g_c[C_X] = (ctl){ fx, fy - gap, br, OVL_G_X, 1, DM_BTN_X };
     g_c[C_Y] = (ctl){ fx - gap, fy, br, OVL_G_Y, 1, DM_BTN_Y };
-    g_c[C_L] = (ctl){ 0.12f * s, 0.30f * s, sr, OVL_G_L, 1, DM_BTN_L };
-    g_c[C_R] = (ctl){ w - 0.12f * s, 0.30f * s, sr, OVL_G_R, 1, DM_BTN_R };
+    g_c[C_L] = (ctl){ 0.25f * s, 0.30f * s, sr, OVL_G_L, 1, DM_BTN_L };
+    g_c[C_R] = (ctl){ w - 0.25f * s, 0.30f * s, sr, OVL_G_R, 1, DM_BTN_R };
     g_c[C_ZL] = (ctl){ 0.26f * s, 0.10f * s, sr * 0.8f, OVL_G_ZL, 0, DM_BTN_ZL };   // (Shield does not use ZL / ZR: off)
     g_c[C_ZR] = (ctl){ w - 0.26f * s, 0.10f * s, sr * 0.8f, OVL_G_ZR, 0, DM_BTN_ZR };
     g_c[C_MINUS] = (ctl){ w * 0.5f - 0.13f * s, 0.06f * s, mr, OVL_G_MINUS, 1, DM_BTN_MINUS };
     g_c[C_PLUS] = (ctl){ w * 0.5f + 0.13f * s, 0.06f * s, mr, OVL_G_PLUS, 1, DM_BTN_PLUS };
-    g_c[C_STICK] = (ctl){ 0.25f * s, h - 0.27f * s, 0.14f * s, OVL_G_NONE, 1, 0 };
+    g_c[C_STICK] = (ctl){ 0.36f * s, h - 0.27f * s, 0.14f * s, OVL_G_NONE, 1, 0 };
+    {   // the D-pad below-right of the left stick, as on a left Joy-Con (bag pockets, menus): four small buttons with a dot towards their direction
+        float dx = 0.80f * s, dy = h - 0.19f * s, dg = 0.085f * s, dr = 0.050f * s;
+        g_c[C_UP] = (ctl){ dx, dy - dg, dr, OVL_G_NONE, 1, DM_BTN_UP }; g_c[C_DOWN] = (ctl){ dx, dy + dg, dr, OVL_G_NONE, 1, DM_BTN_DOWN };
+        g_c[C_LEFT] = (ctl){ dx - dg, dy, dr, OVL_G_NONE, 1, DM_BTN_LEFT }; g_c[C_RIGHT] = (ctl){ dx + dg, dy, dr, OVL_G_NONE, 1, DM_BTN_RIGHT };
+    }
+    g_c[C_RSTICK] = (ctl){ w - 0.80f * s, h - 0.19f * s, 0.11f * s, OVL_G_NONE, 1, 0 };
+    if (!g_rstick_on) { g_rknob_x = g_c[C_RSTICK].cx; g_rknob_y = g_c[C_RSTICK].cy; }
     if (!g_stick_on) { g_stick_x = g_knob_x = g_c[C_STICK].cx; g_stick_y = g_knob_y = g_c[C_STICK].cy; }
 }
 static int hit(int c, float x, float y, float slack) {
@@ -57,6 +69,7 @@ static int hit(int c, float x, float y, float slack) {
     return k->shown && dx * dx + dy * dy <= r * r;
 }
 static int target_at(float x, float y) {
+    if (hit(C_RSTICK, x, y, 1.3f)) return C_RSTICK;
     for (int c = C_A; c < NCTL; c++) if (hit(c, x, y, 1.3f)) return c;   // thumbs miss: touch areas 1.3 times the drawing
     if (x < g_w * 0.42f && y > g_h * 0.30f) return C_STICK;
     if (x > g_w * 0.45f) return C_CAM;
@@ -95,7 +108,7 @@ static void click_locked(void) { g_hpend = 1; pthread_cond_signal(&g_hcv); }   /
 
 // ---------- touch ----------
 static void recompute_locked(void) {
-    uint64_t b = 0; float lx = 0, ly = 0; int stick = 0; double t = now_s();
+    uint64_t b = 0; float lx = 0, ly = 0, rx = 0, ry = 0; int stick = 0, rstick = 0; double t = now_s();
     for (int i = 0; i < 10; i++) {
         if (g_ptr[i].id < 0) continue;
         int c = g_ptr[i].target;
@@ -103,13 +116,19 @@ static void recompute_locked(void) {
             if (d > r) { dx *= r / d; dy *= r / d; }
             float nx = dx / r, ny = -dy / r; if (nx * nx + ny * ny < 0.12f * 0.12f) nx = ny = 0;   // dead zone
             lx = nx; ly = ny; stick = 1; g_knob_x = g_stick_x + dx; g_knob_y = g_stick_y + dy; }
+        else if (c == C_RSTICK) { const ctl *k = &g_c[C_RSTICK]; float r = k->r, dx = g_ptr[i].x - k->cx, dy = g_ptr[i].y - k->cy, d = sqrtf(dx * dx + dy * dy);
+            if (d > r) { dx *= r / d; dy *= r / d; }
+            float nx = dx / r, ny = -dy / r; if (nx * nx + ny * ny < 0.12f * 0.12f) nx = ny = 0;
+            rx = nx; ry = ny; rstick = 1; g_rknob_x = k->cx + dx; g_rknob_y = k->cy + dy; }
         else if (c >= C_A) b |= g_c[c].btn;
     }
     for (int c = C_A; c < NCTL; c++) if (t < g_held_until[c]) b |= g_c[c].btn;
+    if (rstick || (b & (DM_BTN_UP | DM_BTN_DOWN | DM_BTN_LEFT | DM_BTN_RIGHT))) g_inner_t = t;   // held: stays clear
+    g_rstick_on = rstick; if (!rstick) { g_rknob_x = g_c[C_RSTICK].cx; g_rknob_y = g_c[C_RSTICK].cy; }
     if (!stick) { g_stick_on = 0; g_stick_x = g_knob_x = g_c[C_STICK].cx; g_stick_y = g_knob_y = g_c[C_STICK].cy; }
     // the camera: the finger's speed, full turn at about a screen height per 0.6 s, at rest within 60 ms of the finger stopping
     float vmax = g_h / 0.6f; if (t - g_cam_t > 0.06) g_cam_vx = g_cam_vy = 0;
-    g_btn = b; g_lx = ax(lx); g_ly = ax(ly); g_rx = ax(g_cam_vx / vmax); g_ry = ax(-g_cam_vy / vmax);
+    g_btn = b; g_lx = ax(lx); g_ly = ax(ly); g_rx = rstick ? ax(rx) : ax(g_cam_vx / vmax); g_ry = rstick ? ax(ry) : ax(-g_cam_vy / vmax);
 }
 // Returns the touch buttons and sticks (for the host's touch source) after this event
 void touch_ui_event(const AInputEvent *e, float w, float h, uint64_t *btn, int32_t s[4]) {
@@ -126,6 +145,7 @@ void touch_ui_event(const AInputEvent *e, float w, float h, uint64_t *btn, int32
         if (t >= 0) for (int i = 0; i < 10; i++) if (g_ptr[i].id < 0) {
             g_ptr[i].id = AMotionEvent_getPointerId(e, k); g_ptr[i].target = t; g_ptr[i].x0 = g_ptr[i].x = g_ptr[i].lx = x; g_ptr[i].y0 = g_ptr[i].y = g_ptr[i].ly = y; g_ptr[i].lt = now_s();
             if (t >= C_A) g_held_until[t] = now_s() + 0.08;
+            if (t == C_RSTICK || t >= C_UP) g_inner_t = now_s();
             if (t == C_STICK) { float r = g_c[C_STICK].r; g_stick_on = 1;   // the base comes to the thumb, kept on screen
                 g_stick_x = clampf(x, r, g_w * 0.42f); g_stick_y = clampf(y, g_h * 0.30f + r * 0.5f, g_h - r); }
             break; }
@@ -193,8 +213,8 @@ static void bubble(dm_ovl_item *it, int *n, int max, const ctl *c, int on, int t
     o = add(it, n, max, x, y, r, OVL_DISC, 0, 0, 0, 0); if (o) { o->glyph = c->glyph; o->gscale = c->glyph == OVL_G_ZL || c->glyph == OVL_G_ZR ? 0.62f : 0.55f; o->galpha = 1; }
 }
 // the stick: a ring with an inner ring, and a glossy knob
-static void compass(dm_ovl_item *it, int *n, int max, float a) {
-    float r = g_c[C_STICK].r, th = g_h / 1080.0f, kr = r * 0.42f;
+static void compass(dm_ovl_item *it, int *n, int max, float a, float g_stick_x, float g_stick_y, float g_knob_x, float g_knob_y, float r) {   // (base, knob, radius)
+    float th = g_h / 1080.0f, kr = r * 0.42f;
     add(it, n, max, g_stick_x, g_stick_y, r, OVL_DISC, 30, 100, 165, 0.45f * a);
     dm_ovl_item *o = add(it, n, max, g_stick_x, g_stick_y, r, OVL_RING, 190, 235, 255, 0.80f * a); if (o) o->ring = clampf(2.6f * th / r, 0.01f, 0.2f);
     o = add(it, n, max, g_stick_x, g_stick_y, r * 0.80f, OVL_RING, 190, 235, 255, 0.35f * a); if (o) o->ring = clampf(1.6f * th / (r * 0.8f), 0.01f, 0.2f);
@@ -209,9 +229,14 @@ int front_overlay(dm_ovl_item *it, int max, int width, int height) {
     frame_input_locked();
     int n = 0;
     if (g_visible) {
+        int faint = now_s() - g_inner_t > 2.0;   // the D-pad and the right stick fade 2 s after their last touch
         for (int c = C_A; c < NCTL; c++) { if (!g_c[c].shown) continue;
-            int on = (g_btn & g_c[c].btn) != 0; bubble(it, &n, max, &g_c[c], on, 0, 1.0f); }
-        compass(it, &n, max, g_stick_on ? 1.0f : 0.75f);
+            int on = (g_btn & g_c[c].btn) != 0; float al = c >= C_UP && faint && !on ? 0.25f : 1.0f; bubble(it, &n, max, &g_c[c], on, 0, al);
+            if (c >= C_UP && al == 1.0f) { float r = g_c[c].r, ox = c == C_LEFT ? -0.42f : c == C_RIGHT ? 0.42f : 0, oy = c == C_UP ? -0.42f : c == C_DOWN ? 0.42f : 0;
+                add(it, &n, max, g_c[c].cx + ox * r, g_c[c].cy + oy * r, r * 0.22f, OVL_DISC, 255, 255, 255, 0.9f); } }
+        compass(it, &n, max, g_stick_on ? 1.0f : 0.75f, g_stick_x, g_stick_y, g_knob_x, g_knob_y, g_c[C_STICK].r);
+        compass(it, &n, max, g_rstick_on ? 1.0f : faint ? 0.25f : 0.75f, g_c[C_RSTICK].cx,   // faint while unused: it and the D-pad sit over the dialogue box
+             g_c[C_RSTICK].cy, g_rknob_x, g_rknob_y, g_c[C_RSTICK].r);
     }
     pthread_mutex_unlock(&g_mu);
     return n;
