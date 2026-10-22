@@ -1,0 +1,2 @@
+# Hand-written vertex / pixel pairs, merged into shader_pairs.tsv by dm/gfx/tools/shader_split.py: vertex key <TAB> pixel key. The bare shaders.nx gives no pairs; the host's pipeline red line prints each row
+342d47f203f56e98	6257c07c20f3340f

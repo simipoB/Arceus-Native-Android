@@ -1,0 +1,4 @@
+# Hand-written translation facts, merged over the generated rows of shader_facts.tsv by dm/gfx/tools/shader_split.py: key <TAB> facts JSON (same format)
+# Metro 2033 Redux has no PC version to pair with, so every fragment output is declared float; these write signed-integer targets (RG8Sint), printed by the host's pipeline red line
+092349f16c2baddc	{"fout":{"0":"sint"}}
+973fe414013b3175	{"fout":{"0":"sint"}}
