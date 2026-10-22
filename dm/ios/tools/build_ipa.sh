@@ -72,6 +72,9 @@ xcodebuild -project DmIOS.xcodeproj -scheme DmIOS -configuration Release -destin
 APP=$DD/Build/Products/Release-iphoneos/DmIOS.app; [ -d "$APP" ] || APP=$(grep -o '/[^ ]*/Release-iphoneos/DmIOS\.app' "$O/build.log" | tail -1)
 [ -n "$APP" ] && [ -d "$APP" ] || die "no built app"; t "app: $APP"
 
+# The app's entitlements (DmIOS.entitlements: the increased memory limit) embedded with an ad-hoc signature: the IPA stays unsigned for the install tool, and tools
+# that keep an app's own entitlements (Sideloadly, TrollStore, SideStore with a developer account) carry them into their signature
+codesign -f -s - --entitlements DmIOS.entitlements "$APP" > /dev/null 2>&1 && t "entitlements embedded: $(codesign -d --entitlements :- "$APP" 2>/dev/null | grep -o 'com.apple.developer[a-z.-]*' | tr '\n' ' ')" || t "[RED] could not embed the entitlements"
 # Straight from the sources: the app without its signature, and without the folders an app built before pack_ipa.py still has (DerivedData keeps resources that left the project;
 # msl/ is also deleted there, it took 1.5 GB of the home disk), then the shader libraries, the add-on content (the RomFS extracted from the player's DLC NSPs, one folder per index:
 # the app sets DM_AOC_DIR at launch, the host reports them as owned and mounts them from it) and the RomFS

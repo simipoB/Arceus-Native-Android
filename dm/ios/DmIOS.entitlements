@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The larger per-app memory limit: Tears of the Kingdom sits at about 3.6 GB once the world is loaded, and the default limit ended it during loading bursts
+	     (a skydive). Embedded by build_ipa.sh's ad-hoc signature, where sideloading tools that keep the app's own entitlements pick it up -->
+	<key>com.apple.developer.kernel.increased-memory-limit</key>
+	<true/>
+</dict>
+</plist>
