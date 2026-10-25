@@ -66,3 +66,55 @@ alongside the Android emulator (memory).
 - Transform feedback captures plain draws only (no indexed, indirect or instanced ones), as on Metal. Arceus makes only plain ones.
 - Prewarm on the Mac: 333 pipelines in 2.3 s, then 0 compiled in 5.5 min of play (246 without the list).
 - Not yet run on the phone. Check `Download/` logs for `[RED]` lines and for `push descriptors: up to N per program`.
+
+## Continuing in VS Code (Windows)
+
+The Mac holds the game files and builds the full `.apks` (RomFS, shaders, prewarm list). On Windows you change the code, rebuild the
+app's library and swap it into the Arceus app already on the phone; the 4 GB of game data stays installed.
+
+### Once
+
+1. **Get the code:** in your Windows checkout of androidswithy, `git pull` (commit `c7cb198` or later). Open the repo folder in VS Code.
+2. **Install the game:** copy `PokemonLegendsArceus.apks` (Mac: `ARCEUS DUMP/Arceus-Android/`, 4.2 GB) to the phone and install it with SAI.
+3. **Use one signing key on both machines:** the `.apks` is signed with the Mac's `dm/android/probe/out/debug.keystore` (store and key
+   password `android`, alias `debug`). Copy that file to Windows and sign with it there. A library signed with your Windows key won't
+   install over the Mac-built app (the phone keeps the first app's signature), and switching keys means uninstalling, which deletes the
+   save (copy `files/save` off the phone first).
+4. **Tools:** NDK r27c at `~/android-ndk/android-ndk-r27c`, Android build-tools 35 (zipalign, apksigner), Python 3, adb, all as for Shield
+   (`dm/android/README.md`, "Building on Windows").
+
+### The edit–build–test loop (VS Code terminal, from `dm/android`)
+
+```sh
+python tools/win_build_lib.py 01001F5010DFA000                      # → out/host-01001F5010DFA000-vulkan/lib/libnxnative.so
+adb shell pm path com.nxnative.arceus                               # the installed base.apk's path
+adb pull <that path>/base.apk base_old.apk
+python tools/apk_swap.py base_old.apk base_new.apk lib/arm64-v8a/libnxnative.so=out/host-01001F5010DFA000-vulkan/lib/libnxnative.so
+zipalign -f -P 16 16384 base_new.apk base_al.apk
+apksigner sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android --v1-signing-enabled false --alignment-preserved --out base_signed.apk base_al.apk
+adb install-multiple -r -p com.nxnative.arceus base_signed.apk      # keeps the two data splits and the save
+```
+
+The game profile is compiled into the library: after editing `dm/games/01001F5010DFA000/game.tsv`, run `win_build_lib.py` again.
+
+### Logs
+
+The app writes `Download/PokemonShield-log.txt` (refreshed while playing) and `Download/PokemonShield-log-previous.txt` (the last run,
+the one that crashed if one did). The name is the same for every game for now, so Arceus overwrites Shield's log. Fetch them with
+`adb pull /sdcard/Download/PokemonShield-log-previous.txt`. Things to look for:
+- `[RED]` lines;
+- `push descriptors: up to N per program` (the Adreno limit; programs above it use descriptor sets);
+- `prewarm: 365 pipelines listed … built … s` (startup prewarm);
+- `pipelines built during play so far` (compiles while playing; the phone records them, so the next launch prewarms them too).
+
+### What needs the Mac
+
+Rewriting the game's code (`patch_nso.py`, after a cut or rule change), the shader build and `.vkr` reflection, recording prewarm runs
+(`vkrun.sh`, MoltenVK), and building a fresh `.apks`. All of these read the game files in `ARCEUS DUMP/`.
+
+### Open items (each waits for your OK)
+
+- Touch controls: Arceus needs ZL (aim) and ZR (throw); Shield's layout hides them.
+- Sharpening: a contrast-adaptive sharpening pass (CAS / FSR 1 RCAS) at presentation.
+- Per-game log file names.
+- One blend effect (pipeline `5356a947…`) is missing on Metal and Vulkan alike.
