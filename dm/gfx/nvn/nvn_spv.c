@@ -320,3 +320,95 @@ uint32_t *spv_int_outputs(const uint32_t *code, size_t words, uint32_t umask, ui
     o[3] = nb; *out_words = w; free(loc); free(tv); free(ncomp);
     return emitted ? o : (free(o), NULL);
 }
+
+// Transform feedback capture (nvn_vk.c tf_draw; the Metal side's main0_tf from dmsh_build.py vs_tf): a copy of a vertex shader that, before each return of its entry function, stores
+// the captured outputs as their bits into storage buffers: buffer b (binding binding0 + b, set 0) gets output tf[b][0]'s first tf[b][1] components at word
+// (VertexIndex - pc.first) * tf[b][1] + pc.base[b] + i, with pc = push constants { uint first; uint base[4]; }. NULL if the code cannot be read
+uint32_t *spv_tf_variant(const uint32_t *code, size_t words, const int tf[4][2], uint32_t binding0, size_t *out_words) {
+    if (words < 5 || code[0] != 0x07230203u) return NULL;
+    uint32_t bound = code[3]; if (!bound || bound > (1u << 22)) return NULL;
+    int32_t *loc = malloc(sizeof(int32_t) * bound); uint8_t *bi = calloc(bound, 1); for (uint32_t i = 0; i < bound; i++) loc[i] = -1;
+    uint32_t entry = 0, t_uint = 0, t_int = 0, vid = 0, vid_ty = 0, outv[64] = {0}, out_ty[64] = {0}, out_nc[64] = {0}, out_ct[64] = {0};   // out_ct: component class 0 float / 1 uint / 2 sint
+    for (size_t i = 5; i < words;) { uint32_t n = code[i] >> 16, op = code[i] & 0xffff; if (!n || i + n > words) { free(loc); free(bi); return NULL; } const uint32_t *x = code + i;
+        if (op == OpDecorate && n >= 4 && x[1] < bound) { if (x[2] == DecLocation) loc[x[1]] = (int32_t)x[3]; else if (x[2] == DecBuiltIn) { bi[x[1]] = 1; if (x[3] == 42 /* VertexIndex */) vid = x[1]; } }
+        else if (op == OpEntryPoint && n >= 3 && !entry) entry = x[2];
+        else if (op == OpTypeInt && n >= 4 && x[2] == 32) { if (x[3]) { if (!t_int) t_int = x[1]; } else if (!t_uint) t_uint = x[1]; }
+        i += n; }
+    for (size_t i = 5; i < words;) { uint32_t n = code[i] >> 16, op = code[i] & 0xffff; const uint32_t *x = code + i;
+        if (op == OpVariable && n >= 4 && x[2] < bound) {
+            const uint32_t *p = def_of(code, words, x[1]); uint32_t pointee = p && (p[0] & 0xffff) == OpTypePointer ? p[3] : 0;
+            if (x[2] == vid) vid_ty = pointee;
+            if (x[3] == SC_Output && loc[x[2]] >= 0 && loc[x[2]] < 64 && !bi[x[2]] && pointee) {
+                const uint32_t *t = def_of(code, words, pointee), *c = t; uint32_t nc = 1;
+                if (t && (t[0] & 0xffff) == OpTypeVector) { nc = t[3]; c = def_of(code, words, t[2]); }
+                if (c && ((c[0] & 0xffff) == OpTypeFloat || (c[0] & 0xffff) == OpTypeInt) && c[2] == 32) {
+                    int l = loc[x[2]]; outv[l] = x[2]; out_ty[l] = pointee; out_nc[l] = nc; out_ct[l] = (c[0] & 0xffff) == OpTypeFloat ? 0 : c[3] ? 2 : 1;
+                    if (nc > 1) out_ct[l] |= (uint32_t)t[2] << 2; else out_ct[l] |= (uint32_t)pointee << 2; } }   // the component type id, above the class bits
+        }
+        i += n; }
+    free(loc); free(bi);
+    if (!entry) return NULL;
+    int pre13 = code[1] < 0x00010300u, pre14 = code[1] < 0x00010400u; uint32_t sc = pre13 ? 2u /* Uniform */ : (uint32_t)SC_StorageBuffer;
+    uint32_t nb = bound;
+    uint32_t n_uint = t_uint ? 0 : nb++, n_int = (vid || t_int) ? 0 : nb++; if (!t_uint) t_uint = n_uint; if (!t_int && !vid) t_int = n_int;
+    uint32_t c[6]; for (int k = 0; k < 6; k++) c[k] = nb++;
+    uint32_t t_rarr = nb++, t_sbs = nb++, t_psbs = nb++, t_pu = nb++, t_pcs = nb++, t_ppcs = nb++, t_ppu = nb++, v_pc = nb++, v_sb[4] = {0};
+    for (int b = 0; b < 4; b++) if (tf[b][1]) v_sb[b] = nb++;
+    uint32_t t_pint = 0; if (!vid) { t_pint = nb++; vid = nb++; vid_ty = t_int; }
+    size_t cap = words * 2 + 1024; uint32_t *o = malloc(4 * cap); size_t w = 5; memcpy(o, code, 20);
+    int decorated = 0, typed = 0, in_entry = 0;
+    #define E(...) do { uint32_t e_[] = { __VA_ARGS__ }; size_t k_ = sizeof e_ / 4; if (w + k_ + 8 > cap) { cap = cap * 2 + k_; o = realloc(o, 4 * cap); } memcpy(o + w, e_, 4 * k_); w += k_; } while (0)
+    for (size_t i = 5; i < words;) { uint32_t n = code[i] >> 16, op = code[i] & 0xffff; const uint32_t *x = code + i;
+        if (w + n + 256 > cap) { cap = cap * 2 + n; o = realloc(o, 4 * cap); }
+        if (op == OpEntryPoint && x[2] == entry) {   // the interface: the vertex index (Input), and before SPIR-V 1.4 only Input / Output variables
+            size_t at = w; memcpy(o + w, x, 4 * n); w += n;
+            if (t_pint) o[w++] = vid;
+            if (!pre14) { o[w++] = v_pc; for (int b = 0; b < 4; b++) if (v_sb[b]) o[w++] = v_sb[b]; }
+            o[at] = (uint32_t)(w - at) << 16 | op; i += n; continue; }
+        if (!decorated && op >= 19 && op <= 39) {   // the first type: annotations end here
+            decorated = 1;
+            E(4u << 16 | OpDecorate, t_rarr, 6 /* ArrayStride */, 4); E(3u << 16 | OpDecorate, t_sbs, pre13 ? (uint32_t)DecBufferBlock : (uint32_t)DecBlock); E(5u << 16 | 72, t_sbs, 0, 35 /* Offset */, 0);
+            E(3u << 16 | OpDecorate, t_pcs, DecBlock); for (uint32_t m = 0; m < 5; m++) E(5u << 16 | 72, t_pcs, m, 35, 4 * m);
+            for (int b = 0; b < 4; b++) if (v_sb[b]) { E(4u << 16 | OpDecorate, v_sb[b], DecDescriptorSet, 0); E(4u << 16 | OpDecorate, v_sb[b], DecBinding, binding0 + (uint32_t)b); }
+            if (t_pint) E(4u << 16 | OpDecorate, vid, DecBuiltIn, 42);
+        }
+        if (!typed && op == 54 /* OpFunction */) {   // before the first function: the new types, constants and variables
+            typed = 1;
+            if (n_uint) E(4u << 16 | OpTypeInt, n_uint, 32, 0);
+            if (n_int) E(4u << 16 | OpTypeInt, n_int, 32, 1);
+            for (uint32_t k = 0; k < 6; k++) E(4u << 16 | OpConstant, t_uint, c[k], k);
+            E(3u << 16 | OpTypeRuntimeArray, t_rarr, t_uint); E(3u << 16 | OpTypeStruct, t_sbs, t_rarr);
+            E(4u << 16 | OpTypePointer, t_psbs, sc, t_sbs); E(4u << 16 | OpTypePointer, t_pu, sc, t_uint);
+            E(7u << 16 | OpTypeStruct, t_pcs, t_uint, t_uint, t_uint, t_uint, t_uint);
+            E(4u << 16 | OpTypePointer, t_ppcs, 9 /* PushConstant */, t_pcs); E(4u << 16 | OpTypePointer, t_ppu, 9, t_uint);
+            E(4u << 16 | OpVariable, t_ppcs, v_pc, 9);
+            for (int b = 0; b < 4; b++) if (v_sb[b]) E(4u << 16 | OpVariable, t_psbs, v_sb[b], sc);
+            if (t_pint) { E(4u << 16 | OpTypePointer, t_pint, SC_Input, t_int); E(4u << 16 | OpVariable, t_pint, vid, SC_Input); }
+        }
+        if (op == 54 && n >= 3) in_entry = x[2] == entry;
+        if (in_entry && op == 253 /* OpReturn */) {
+            uint32_t vi = nb++, viu = vi, pf = nb++, first = nb++, rel = nb++;
+            E(4u << 16 | 61 /* OpLoad */, vid_ty, vi, vid);
+            if (vid_ty != t_uint) { viu = nb++; E(4u << 16 | 124 /* OpBitcast */, t_uint, viu, vi); }
+            E(5u << 16 | 65, t_ppu, pf, v_pc, c[0]); E(4u << 16 | 61, t_uint, first, pf); E(5u << 16 | 130 /* OpISub */, t_uint, rel, viu, first);
+            for (int b = 0; b < 4; b++) { if (!v_sb[b]) continue; int l = tf[b][0], nc = tf[b][1];
+                uint32_t pb = nb++, base = nb++, m = nb++, row = nb++, val = 0;
+                E(5u << 16 | 65, t_ppu, pb, v_pc, c[1 + b]); E(4u << 16 | 61, t_uint, base, pb);
+                E(5u << 16 | 132 /* OpIMul */, t_uint, m, rel, c[nc]); E(5u << 16 | 128 /* OpIAdd */, t_uint, row, m, base);
+                if (l >= 0 && l < 64 && outv[l]) { val = nb++; E(4u << 16 | 61, out_ty[l], val, outv[l]); }
+                for (int k = 0; k < nc; k++) {
+                    uint32_t bits = c[0];
+                    if (val && (uint32_t)k < out_nc[l]) {
+                        uint32_t comp = val; if (out_nc[l] > 1) { comp = nb++; E(5u << 16 | 81 /* OpCompositeExtract */, out_ct[l] >> 2, comp, val, (uint32_t)k); }
+                        bits = comp; if ((out_ct[l] & 3) != 1) { bits = nb++; E(4u << 16 | 124, t_uint, bits, comp); } }
+                    uint32_t idx = nb++, p = nb++; E(5u << 16 | 128, t_uint, idx, row, c[k]); E(6u << 16 | 65, t_pu, p, v_sb[b], c[0], idx); E(3u << 16 | 62 /* OpStore */, p, bits);
+                }
+            }
+        }
+        memcpy(o + w, x, 4 * n); w += n; i += n;
+    }
+    #undef E
+    if (!typed || !decorated) { free(o); return NULL; }
+    o[3] = nb; *out_words = w;
+    return o;
+}

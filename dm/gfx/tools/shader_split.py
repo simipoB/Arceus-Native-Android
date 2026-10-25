@@ -546,7 +546,7 @@ def nvn_captured(cap):
     return out
 
 def gfpak_members(d):
-    """Game Freak's GFLXPACK (Pokémon Sword / Shield: 7,699 .gfpak archives, 201,635 entries, every one LZ4; the models' BNSH shaders are only inside them).
+    """Game Freak's GFLXPACK (Pokémon Sword / Shield: 7,699 .gfpak archives, 201,635 entries, every one LZ4; Pokémon Legends: Arceus: Oodle; the models' BNSH shaders are only inside them).
     Header: magic, version u32, relocated u32, file count i32, folder count i32, file table u64, hash table u64; file table entries of 24 bytes:
     level u16, compression u16 (0 none, 1 zlib, 2 LZ4 block, 3 Oodle), unpacked size u32, packed size u32, padding u32 (0xcc), data offset u64. Entries are named by hash only, so they are labelled by index"""
     import lz4.block, zlib
@@ -557,6 +557,7 @@ def gfpak_members(d):
         if typ == 0: yield i, raw
         elif typ == 1: yield i, zlib.decompress(raw)
         elif typ == 2: yield i, lz4.block.decompress(raw, uncompressed_size=usz)
+        elif typ == 3: yield i, oodle(raw, usz)   # Pokémon Legends: Arceus: the game's own Oodle decoder in the Mac host (profile shader_oodle)
         else: red(f'gfpak entry {i} compression {typ} not handled')
 
 def scan_blob(d, label, out):

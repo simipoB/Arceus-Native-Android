@@ -34,3 +34,6 @@ size_t spv_strip_unused(uint32_t *code, size_t words);
 void spv_frag_outputs(const uint32_t *code, size_t words, uint8_t cls[8]);
 // A copy whose float outputs at the locations in umask / smask hold the same bits as uint / int outputs (integer colour targets). NULL if nothing to do or not possible
 uint32_t *spv_int_outputs(const uint32_t *code, size_t words, uint32_t umask, uint32_t smask, size_t *out_words);
+// A copy of a vertex shader that stores its transform feedback captures into storage buffers (binding0 + b in set 0): tf[b] = { output location, components } (components 0 = buffer unused),
+// at word (VertexIndex - first) * components + base[b], first and base[4] in push constants (5 uints). NULL if not possible
+uint32_t *spv_tf_variant(const uint32_t *code, size_t words, const int tf[4][2], uint32_t binding0, size_t *out_words);

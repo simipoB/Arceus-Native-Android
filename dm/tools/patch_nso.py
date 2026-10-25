@@ -133,6 +133,17 @@ CUTS = {
   'b1f12fd919eae86ab8a978317677e64b': [
     (0x1b3e3e4, '6200c0d2', '2200c0d2', 'StandardAllocator::Initialize(nullptr, size): address space mov x2,#0x300000000 → mov x2,#0x100000000 (12 GB → 4 GB)'),
   ],
+  # Pokémon Legends: Arceus 1.1.1 (v262144) sdk (SDK 11): the same node area cut. The constructor is at sdk+0x34e038 (AddressRegionManager::AddressRegionManager, limit = alias start + 0x3fe00000
+  # at +0x10, the area registered as occupied at +0x34e0e4)
+  'b39add63421be525d352e576dab438d3': [
+    (0x34e048, '08fca752', '087ca052', 'AddressRegionManager constructor: node area limit mov w8,#0x3fe00000 → mov w8,#0x3e00000'),
+    (0x34e0e4, '09fca752', '097ca052', 'AddressRegionManager constructor: length of the node area registered as an occupied region mov w9,#0x3fe00000 → mov w9,#0x3e00000'),
+  ],
+  # Pokémon Legends: Arceus 1.1.1 (v262144) main: nninitStartup (main+0x2779d20) reaches the global StandardAllocator's first use (main+0x2b4fac0, a guarded static) which initializes it with
+  # virtual address memory over 32 GB of address space; a host alias region holds a few GB, so Initialize aborted in nninitStartup. As with Z-A the pool bounds what it maps (profile mem_map_limit)
+  'aee8f150dda1b5a838806e1a5ea6827a': [
+    (0x2b4faec, '0201c0d2', '2200c0d2', 'StandardAllocator::Initialize(nullptr, size): address space mov x2,#0x800000000 → mov x2,#0x100000000 (32 GB → 4 GB)'),
+  ],
   # The Legend of Zelda: Link's Awakening 1.1.0 (v131072) main: the physics step (main+0x15730, main thread) rebuilds each world's PhysX completion task in place
   # (a PxLightCpuTask at world+0xc8) and passes it to simulate. A worker runs it (main+0x10ccf80: fetchResults, world+0x1d8 done = 1, notify, unlock) and then calls its
   # release (main+0x10cd070), which calls the task's own destructor: vtable back to the PxLightCpuTask base, mTm = 0 (main+0x10cced0). At 30 fps the game steps twice
@@ -225,6 +236,38 @@ for off, ob, nb, why in cuts:
     ob, nb = bytes.fromhex(ob), bytes.fromhex(nb)
     assert len(ob) == len(nb) and IMG[off:off + len(ob)] == ob, f'cut original bytes mismatch {off:#x}: {bytes(IMG[off:off + len(ob)]).hex()}'
     IMG[off:off + len(nb)] = nb
+# ---- Exclusive swap loops ----
+# A load-exclusive / store-exclusive loop that only swaps in a value it does not compute (xzr, or a register the loop leaves alone), with stores to the stack between the two:
+# unoptimized code spills the loaded value inside the pair (Pokémon Legends: Arceus main+0x1e916b8: ldaxr x9,[x8]; str x9,[sp,#0xa0]; stlxr w9,xzr,[x8]; cbnz w9, back).
+# The Switch's Cortex-A57 keeps the reservation over a store of its own; Apple cores (and other newer ones) may drop it for a store that near, and then the store-exclusive fails
+# every time: Arceus froze about 25 s into loading a save, depending on where the stack sat. One LSE swap does the same: swp{a}{l} Xv, Xt, [Xn] at the load (acquire / release as
+# the pair had them), the stores kept, the status register zeroed at the store-exclusive (as a successful one leaves it) and the branch back removed
+def llsc_swaps():
+    out = []
+    for i in range(0, TEXT_END - 16, 4):
+        w = struct.unpack_from('<I', IMG, i)[0]
+        if (w & 0x3fff7c00) != 0x085f7c00 or (w >> 30) < 2: continue   # ldxr / ldaxr, 32 or 64 bits
+        rt, rn, sz, acq = w & 31, (w >> 5) & 31, w >> 30, (w >> 15) & 1
+        for j in range(1, 6):
+            v = struct.unpack_from('<I', IMG, i + 4 * j)[0]
+            if (v & 0x3fe07c00) == 0x08007c00: break   # stxr / stlxr
+            if (v & 0xbfc003e0) != 0xb90003e0: j = 0; break   # only str (unsigned offset) to sp in between
+        else: continue
+        if j < 2: continue
+        rs, rv, rel = (v >> 16) & 31, v & 31, (v >> 15) & 1
+        if (v >> 30) != sz or ((v >> 5) & 31) != rn or rv == rt or rn == rt or rs == rn or rs == rv: continue
+        cb = struct.unpack_from('<I', IMG, i + 4 * j + 4)[0]
+        if (cb & 0xff00001f) != (0x35000000 | rs): continue   # cbnz ws, ...
+        off19 = (cb >> 5) & 0x7ffff; off19 -= (1 << 19) if off19 & 0x40000 else 0
+        if i + 4 * j + 4 + 4 * off19 != i: continue   # ... back to the load
+        swp = 0x38208000 | sz << 30 | acq << 23 | rel << 22 | rv << 16 | rn << 5 | rt
+        out.append((i, w, swp, 'load'))
+        out.append((i + 4 * j, v, 0x2a1f03e0 | rs, 'status'))   # mov ws, wzr
+        out.append((i + 4 * j + 4, cb, 0xd503201f, 'branch'))   # nop
+    return out
+for off, ow, nw, what in llsc_swaps():
+    IMG[off:off + 4] = struct.pack('<I', nw)
+    cuts.append((off, struct.pack('<I', ow).hex(), struct.pack('<I', nw).hex(), f'exclusive swap loop with stack stores inside → LSE swap ({what})'))
 # Key page indices are fixed; the key page content is written by the loader as "actual key number × 8".
 KEYS = {'K18': 508, 'KTLS': 509, 'KTLR': 510, 'KGATE': 511}
 KEY_INDEX = {k: i for i, k in enumerate(('K18', 'KTLS', 'KTLR', 'KGATE'))}

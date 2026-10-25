@@ -17,11 +17,11 @@ sys.path.insert(0, str(HERE.parent / 'tools')); import nso_syms   # dynamic symb
 MAGICS = [(b'UnityFS\0', 'UnityFS'), (b'UnityWeb', 'UnityWeb'), (b'UnityRaw', 'UnityRaw'), (b'BNSH', 'BNSH'), (b'BAHS', 'BAHS'), (b'SARC', 'SARC'), (b'Yaz0', 'Yaz0'),
           (bytes.fromhex('28b52ffd'), 'zstd'), (b'FRES', 'bfres'), (b'BNTX', 'BNTX'), (b'BWAV', 'BWAV'), (b'FSAR', 'BFSAR'), (b'CPK ', 'CRI CPK'), (b'CRID', 'CRI USM'),
           (b'@UTF', 'CRI UTF'), (b'AKPK', 'Wwise pck'), (b'BKHD', 'Wwise bnk'), (b'FSB5', 'FMOD'), (b'\x89PNG', 'PNG'), (b'RIFF', 'RIFF'), (b'OggS', 'Ogg'), (b'PK\x03\x04', 'zip'), (b'NSO0', 'NSO'),
-          (bytes.fromhex('03022307'), 'SPIR-V'), (b'ONEPACK\0', 'Trinity pack')]
+          (bytes.fromhex('03022307'), 'SPIR-V'), (b'ONEPACK\0', 'Trinity pack'), (b'GFLXPACK', 'Game Freak pack')]
 PACKED = {'UnityFS', 'UnityWeb', 'Yaz0', 'zstd', 'BWAV', 'CRI CPK', 'CRI USM', 'Wwise pck', 'FMOD', 'PNG', 'Ogg', 'zip', 'Trinity pack'}   # file headers of compressed / media formats (zip_store)
 # IL2CPP by the metadata file every IL2CPP player opens: Unity 2022's main (Ace Attorney Investigations Collection) has no il2cpp_ API names, Engage's 2020.3 has both
 MARKERS = [(b'nvnBootstrapLoader', 'NVN'), (b'vkCreateInstance', 'Vulkan'), (b'eglGetProcAddress', 'EGL / OpenGL'), (b'global-metadata.dat', 'Unity IL2CPP'), (b'UnityEngine', 'Unity'),
-           (b'sead::', 'Nintendo sead'), (b'agl::', 'Nintendo agl'), (b'gsys::', 'Nintendo gsys'), (b'Unreal', 'Unreal'), (b'UE4', 'Unreal 4'), (b'Havok', 'Havok'), (b'CRIWARE', 'CRIWARE'), (b'Wwise', 'Wwise')]
+           (b'sead::', 'Nintendo sead'), (b'agl::', 'Nintendo agl'), (b'gsys::', 'Nintendo gsys'), (b'Unreal', 'Unreal'), (b'UE4', 'Unreal 4'), (b'Havok', 'Havok'), (b'CRIWARE', 'CRIWARE'), (b'Wwise', 'Wwise'), (b'OodleLZ_Decompress', 'Oodle')]
 SHADER_CONTAINERS = ('BNSH', 'BAHS', 'UnityFS', 'Trinity pack')   # RomFS files that hold a game's shaders: with them, GLSLC outputs in main are not its shaders (Engage's main has 11 it does not use)
 GLSLC_MAGIC = b'\x91\x68\x86\x19'   # GLSLC compiler outputs (shader_split.py glslc_shaders)
 APP_POOL = 0xCD500000               # the application memory pool of a 4 GB Switch (3285 MiB), what every profile but Engage's reports
@@ -144,6 +144,8 @@ def guess(F, hooks=None):
         why = f'main holds {F["glslc"]} GLSLC outputs and the RomFS has no {" / ".join(SHADER_CONTAINERS)}: the shaders are compiled into main (13 Sentinels, the KTGL games)'
         G['shader_main_glslc'] = ('on', why)
         G['shader_separable'] = ('on', 'with shader_main_glslc: single-stage programs combined per draw (every GLSLC output in main seen so far is one stage)')
+    if R['mags']['Game Freak pack'] and 'Oodle' in F.get('main_markers', set()):
+        G['shader_oodle'] = ('on', 'the RomFS has Game Freak packs (GFLXPACK .gfpak: Pokémon Legends: Arceus) and main links Oodle: entries of compression 3 are Oodle, decoded for the split by the game\'s own decoder in the Mac host (dm/host/hle_oodle.c)')
     if R['mags']['Trinity pack']:
         G['shader_oodle'] = ('on', 'the RomFS has Trinity packs (ONEPACK, arc/data.trpfs: Pokémon Legends: Z-A), Oodle-compressed: the shader split decodes them with the game\'s own decoder in the Mac host (dm/host/hle_oodle.c, its address per build)')
     glslc_mod = [m for m in keep if 'glslcCompile' in mods[m]['exports']]

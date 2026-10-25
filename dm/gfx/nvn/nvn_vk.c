@@ -64,6 +64,8 @@ static pthread_mutex_t g_qmu = PTHREAD_MUTEX_INITIALIZER;
 static int g_fdmap = 0;   // queue submissions come from the submit thread and the present thread
 static PFN_vkCmdPushDescriptorSetKHR p_push;
 static int g_nopush;   // no VK_KHR_push_descriptor (the emulator's gfxstream, some phones): each draw's bindings go into a descriptor set from the submission's pools
+static uint32_t g_maxpush = 32;   // maxPushDescriptors: a program with more descriptors takes the descriptor-set path too (vprog np)
+static int g_np;   // the program being bound uses descriptor sets (g_nopush, or over g_maxpush)
 static PFN_vkGetMemoryHostPointerPropertiesEXT p_hostprops;
 
 static int has_ext(const VkExtensionProperties *e, uint32_t n, const char *name) { for (uint32_t i = 0; i < n; i++) if (!strcmp(e[i].extensionName, name)) return 1; return 0; }
@@ -100,6 +102,10 @@ void mtl_init(void) {
     if (has_ext(de, nde, "VK_KHR_push_descriptor") && !getenv("DM_VK_NO_PUSH")) dext[ndext++] = "VK_KHR_push_descriptor";
     else { g_nopush = 1; VLOG("no push descriptors: descriptor sets from per-submission pools"); }
     if (has_ext(de, nde, "VK_KHR_portability_subset")) { dext[ndext++] = "VK_KHR_portability_subset"; g_moltenvk = 1; }
+    if (!g_nopush) { VkPhysicalDevicePushDescriptorPropertiesKHR pd = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PUSH_DESCRIPTOR_PROPERTIES_KHR };
+        VkPhysicalDeviceProperties2 pp = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &pd }; vkGetPhysicalDeviceProperties2(g_pd, &pp);
+        if (pd.maxPushDescriptors) g_maxpush = pd.maxPushDescriptors; if (getenv("DM_VK_MAXPUSH")) g_maxpush = (uint32_t)atoi(getenv("DM_VK_MAXPUSH"));   // a lower limit tests the set path
+        VLOG("push descriptors: up to %u per program", g_maxpush); }
     if ((g_host_import = has_ext(de, nde, "VK_EXT_external_memory_host"))) dext[ndext++] = "VK_EXT_external_memory_host";
     if ((g_has_swapchain = has_ext(de, nde, "VK_KHR_swapchain"))) dext[ndext++] = "VK_KHR_swapchain";
     if ((g_clipctl = has_ext(de, nde, "VK_EXT_depth_clip_control"))) dext[ndext++] = "VK_EXT_depth_clip_control";
@@ -285,7 +291,18 @@ void mtl_pool_add(const void *mem, uint64_t size) {
         VkImportMemoryHostPointerInfoEXT imp = { .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT, .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT, .pHostPointer = (void *)a };
         VkMemoryAllocateInfo mai = { .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .pNext = &imp, .allocationSize = n, .memoryTypeIndex = (uint32_t)(t < 0 ? 0 : t) };
         VkResult r = t < 0 ? VK_ERROR_OUT_OF_HOST_MEMORY : vkAllocateMemory(g_dev, &mai, NULL, &e.mem);
-        if (r) VDIE("memory pool %p+%#llx: host memory import failed (%d)", mem, (unsigned long long)size, r);
+        if (r) {   // a pool the import refuses (Pokémon Legends: Arceus on MoltenVK, a 344 KB pool, -2 about 25 s into loading a save) is mirrored instead, as on drivers without whole mappings
+            RED_ONCE(60, "memory pool %p+%#llx: host memory import failed (%d): mirrored", mem, (unsigned long long)size, r);
+            vkDestroyBuffer(g_dev, e.buf, NULL); bi.pNext = NULL; VKCHECK(vkCreateBuffer(g_dev, &bi, NULL, &e.buf)); vkGetBufferMemoryRequirements(g_dev, e.buf, &rq);
+            int ts = mem_type(rq.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 0);
+            VkMemoryAllocateInfo ma = { .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .allocationSize = rq.size > n ? rq.size : n, .memoryTypeIndex = (uint32_t)ts };
+            VKCHECK(vkAllocateMemory(g_dev, &ma, NULL, &e.mem));
+            void *p = NULL; VKCHECK(vkMapMemory(g_dev, e.mem, 0, VK_WHOLE_SIZE, 0, &p));
+            e.shadow = p; atomic_fetch_add(&g_nshadow, 1);
+            if (!nvn_dirty_tracked((void *)a, n)) { nvn_dirty_add_range((void *)a, n); e.tracked_here = 1; }
+            e.stamp = nvn_dirty_now(); nvn_dirty_protect((void *)a, n);
+            memcpy(p, (void *)a, n);
+        }
     } else {
         // The driver's own memory, preferably cached and coherent (Adreno type 0xf), filled with what the pool holds, then moved onto the pool's pages: from here on the game's
         // pointers and the GPU address the same memory. The driver's old mapping range gets a PROT_NONE placeholder, so nothing else lands where the driver believes its mapping is
@@ -960,13 +977,14 @@ static VkSampler samp_vk(const samp_par *p) {
 }
 // The same sampler without filtering, for integer-format textures (Vulkan cannot filter them: undefined on strict drivers). Made on first use, kept per ID
 static VkSampler samp_nearest_by_id(int sid) {   // caller holds g_rmu
-    if (sid <= 0 || sid >= g_nsreg || !g_sreg_ok[sid]) return VK_NULL_HANDLE;
+    if (sid < 0 || sid >= g_nsreg || !g_sreg_ok[sid]) return VK_NULL_HANDLE;
     if (sid >= g_nsvkn) { int n = g_nsreg; g_svkn = realloc(g_svkn, n * sizeof *g_svkn); memset(g_svkn + g_nsvkn, 0, (n - g_nsvkn) * sizeof *g_svkn); g_nsvkn = n; }
     if (!g_svkn[sid]) { samp_par q = g_sreg[sid]; q.magf = 0; q.minf = q.minf <= 1 ? 0 : 2; q.aniso = 0; g_svkn[sid] = samp_vk(&q); }
     return g_svkn[sid];
 }
+// Sampler ID 0 is a real sampler, as in the Metal replay (Pokémon Legends: Arceus samples through it: treated as unbound it fell back to the unfiltered dummy and every gradient banded)
 static VkSampler samp_by_id(int sid) {   // caller holds g_rmu
-    if (sid <= 0 || sid >= g_nsreg || !g_sreg_ok[sid]) return VK_NULL_HANDLE;
+    if (sid < 0 || sid >= g_nsreg || !g_sreg_ok[sid]) return VK_NULL_HANDLE;
     if (!g_svk[sid]) g_svk[sid] = samp_vk(&g_sreg[sid]);
     return g_svk[sid];
 }
@@ -1088,6 +1106,7 @@ typedef struct vshader {
     uint32_t *code; size_t nw;                  // fragment shaders: the (rebound) SPIR-V, for variants
     uint8_t out_cls[8];                         // fragment outputs by location: 0 float, 1 uint, 2 sint, 255 none
     struct { uint64_t drop; uint32_t um, sm; VkShaderModule mod; } var[8]; int nvar;   // variants: inputs the previous stage never writes (drop), float outputs to integer targets (um / sm)
+    int tf[4][2]; uint16_t tf_stride[4]; VkShaderModule tfmod;   // transform feedback: per buffer { output location, components } and stride; the capture variant (tf_draw)
 } vshader;
 static char g_spv_dir[1024];
 static nvn_hmap g_shmap = {.klen = 8};      // shader key (8 bytes) → stage + 1 (as a pointer)
@@ -1123,6 +1142,7 @@ static void c1_store(vshader *s, const uint8_t *c1, uint32_t n) {
     memcpy(g_cbank_map + g_cbank_used, c1, n); s->c1buf = g_cbank; s->c1off = g_cbank_used; s->c1len = n ? (n + 15) & ~15u : 16; g_cbank_used += need;
     pthread_mutex_unlock(&g_cbmu);
 }
+enum { TF_BIND = 320 };   // the capture buffers' bindings (past every stage's shifted range, stage_shift)
 static uint32_t stage_shift(int st) { return st == 1 ? 64 : st == 2 ? 128 : st == 3 ? 192 : st == 4 ? 256 : 0; }
 // The shader set packed into one mapped file (DM_SPV_PAK, dm/android/tools/spv_pak.py): "NXSP", version, count, chain[16], sorted {key[8], spv off/len, vkr off/len}, data.
 // Version 2 stores each blob as u32 size + a zlib stream (a quarter of the size)
@@ -1182,6 +1202,7 @@ static vshader *shader_load(const uint8_t key[8], int st) {
         else if (!strncmp(ln, "drv ", 4)) { int a, c; if (sscanf(ln + 4, "%d %d", &a, &c) == 2) { s->drv_read[0] = (uint8_t)a; s->drv_read[2] = (uint8_t)c; } }
         else if (!strncmp(ln, "colors ", 7)) { int m, k; if (sscanf(ln + 7, "%d %d", &m, &k) == 2) { s->color_mask = (uint8_t)m; s->color_known = (uint8_t)k; } }
         else if (!strncmp(ln, "unfill ", 7)) unfill = 1;
+        else if (!strncmp(ln, "tf ", 3)) { int bb, l, nc, sd; if (sscanf(ln + 3, "%d %d %d %d", &bb, &l, &nc, &sd) == 4 && bb >= 0 && bb < 4 && nc >= 1 && nc <= 4) { s->tf[bb][0] = l; s->tf[bb][1] = nc; s->tf_stride[bb] = (uint16_t)sd; } }
     }
     if (unfill) VLOG("[RED] shader %s reads driver-segment locations the replay cannot fill", hex);
     for (int i = 0; i < s->nres; i++) {
@@ -1216,6 +1237,11 @@ static vshader *shader_load(const uint8_t key[8], int st) {
     if (spst == 0 || spst == 2) { size_t nw; uint32_t *c2 = spv_init_outputs(code, ns / 4, &nw); if (c2) { free(code); code = c2; ns = nw * 4; } }   // outputs start at (0, 0, 0, 1) as on the hardware
     if (st == 1) spv_frag_outputs(code, ns / 4, s->out_cls);
     spv_io_masks(code, ns / 4, &s->in_mask, &s->out_mask);
+    if (st == 0 && (s->tf_stride[0] | s->tf_stride[1] | s->tf_stride[2] | s->tf_stride[3])) {   // transform feedback: the capture variant (tf_draw)
+        size_t tw; uint32_t *tc = spv_tf_variant(code, ns / 4, (const int (*)[2])s->tf, TF_BIND, &tw);
+        if (tc) { VkShaderModuleCreateInfo tci = { .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = tw * 4, .pCode = tc }; if (vkCreateShaderModule(g_dev, &tci, NULL, &s->tfmod)) s->tfmod = VK_NULL_HANDLE; free(tc); }
+        if (!s->tfmod) VLOG("[RED] shader %s: transform feedback capture variant failed", hex);
+    }
     VkShaderModuleCreateInfo mci = { .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = ns, .pCode = code };
     VkResult r = vkCreateShaderModule(g_dev, &mci, NULL, &s->mod);
     if (st == 1) { s->code = code; s->nw = ns / 4; } else free(code);
@@ -1230,7 +1256,7 @@ static vshader *shader_get(const uint8_t key[8], int st) {
     pthread_mutex_unlock(&g_shmu);
     return s;
 }
-typedef struct vprog { vshader *sh[6]; VkDescriptorSetLayout dsl[2]; VkPipelineLayout pl[2]; } vprog;   // [0] graphics stages, [1] compute
+typedef struct vprog { vshader *sh[6]; VkDescriptorSetLayout dsl[2]; VkPipelineLayout pl[2]; uint8_t np[2]; } vprog;   // [0] graphics stages, [1] compute; np: descriptor sets instead of pushes
 static nvn_hmap g_progs = {.klen = 8};   // program serial → vprog
 static vprog *prog_get(const prog_t *p) {
     vprog *o = p->serial ? nvn_hm_get(&g_progs, &p->serial) : NULL; if (o) return o;
@@ -1253,12 +1279,19 @@ static VkDescriptorType desc_type(int kind) {
 }
 static VkPipelineLayout prog_layout(vprog *o, int compute) {
     if (o->pl[compute]) return o->pl[compute];
-    VkDescriptorSetLayoutBinding b[320]; uint32_t n = 0;
+    VkDescriptorSetLayoutBinding b[324]; uint32_t n = 0;
     for (int st = compute ? 5 : 0; st < (compute ? 6 : 5); st++) { vshader *s = o->sh[st]; if (!s) continue;
         for (int i = 0; i < s->nres && n < 320; i++) b[n++] = (VkDescriptorSetLayoutBinding){ s->res[i].binding + s->shift, desc_type(s->res[i].kind), s->res[i].count, s->vkstage, NULL }; }
-    VkDescriptorSetLayoutCreateInfo dci = { .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .flags = g_nopush ? 0 : VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR, .bindingCount = n, .pBindings = b };
+    int tf = !compute && o->sh[0] && o->sh[0]->tfmod;   // transform feedback: the capture buffers and { first, base[4] } (tf_draw)
+    if (tf) for (int k = 0; k < 4; k++) if (o->sh[0]->tf_stride[k]) b[n++] = (VkDescriptorSetLayoutBinding){ TF_BIND + (uint32_t)k, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, NULL };
+    VkPushConstantRange pcr = { VK_SHADER_STAGE_VERTEX_BIT, 0, 20 };
+    // more descriptors than one push takes (Pokémon Legends: Arceus' terrain: 29, past the 32 of some Adreno drivers with other programs): this program uses descriptor sets
+    uint32_t nd = 0; for (uint32_t i = 0; i < n; i++) nd += b[i].descriptorCount;
+    o->np[compute] = (uint8_t)(g_nopush || nd > g_maxpush);
+    if (o->np[compute] && !g_nopush) { static int said; if (!said++) VLOG("a program with %u descriptors (push limit %u): descriptor sets for such programs", nd, g_maxpush); }
+    VkDescriptorSetLayoutCreateInfo dci = { .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .flags = o->np[compute] ? 0 : VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR, .bindingCount = n, .pBindings = b };
     VKCHECK(vkCreateDescriptorSetLayout(g_dev, &dci, NULL, &o->dsl[compute]));
-    VkPipelineLayoutCreateInfo pci = { .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .setLayoutCount = 1, .pSetLayouts = &o->dsl[compute] };
+    VkPipelineLayoutCreateInfo pci = { .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .setLayoutCount = 1, .pSetLayouts = &o->dsl[compute], .pushConstantRangeCount = tf ? 1u : 0u, .pPushConstantRanges = &pcr };
     VKCHECK(vkCreatePipelineLayout(g_dev, &pci, NULL, &o->pl[compute]));
     return o->pl[compute];
 }
@@ -1271,7 +1304,7 @@ static struct {
     va_st attr[16]; int nattr; vs_st stream[16]; int nstream; NVNbufferRange vbuf[16];
     p_bind_buf ubo[6][16], ssbo[6][16]; uint64_t tex[6][NTEX], samp[6][128], img[6][32];
     uint32_t st_vmask[2], st_wmask[2], st_ref[2];
-    p_poly_offset po; float vp[16][4]; float dr[2]; int has_vp; int depth_clamp; float blend_color[4]; int64_t copy_stride, copy_img_stride; int rast_discard;
+    p_poly_offset po; float vp[16][4]; float dr[2]; int has_vp; int depth_clamp; float blend_color[4]; int64_t copy_stride, copy_img_stride; int rast_discard; p_tf_bind tf[4]; uint64_t tf_off[4]; int tf_on;
 } S;
 static _Atomic int g_origin_ll, g_depth_zero;
 void mtl_set_origin_lower_left(int on) { if (atomic_exchange(&g_origin_ll, on) != on) VLOG("window origin: %s", on ? "lower left (GL)" : "upper left"); }
@@ -1565,7 +1598,7 @@ static void *prewarm_main(void *arg) {
 static VkPipeline pso_make(vprog *pr, pkey k) {
     vshader *vs = pr->sh[0], *fs = pr->sh[1]; VkPipeline p = VK_NULL_HANDLE;
     VkPipelineShaderStageCreateInfo st[5]; uint32_t nst = 0;
-    for (int i = 0; i < 5; i++) if (pr->sh[i] && !(i == 1 && k.discard)) st[nst++] = (VkPipelineShaderStageCreateInfo){ .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = pr->sh[i]->vkstage, .module = i == 1 ? frag_module(pr, k.cfmt) : pr->sh[i]->mod, .pName = "main" };
+    for (int i = 0; i < 5; i++) if (pr->sh[i] && !(i == 1 && k.discard)) st[nst++] = (VkPipelineShaderStageCreateInfo){ .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = pr->sh[i]->vkstage, .module = i == 1 ? frag_module(pr, k.cfmt) : i == 0 && k.discard && pr->sh[0]->tfmod ? pr->sh[0]->tfmod : pr->sh[i]->mod, .pName = "main" };
     VkVertexInputBindingDescription vb[17]; VkVertexInputAttributeDescription va[32]; VkVertexInputBindingDivisorDescriptionEXT vd[16]; uint32_t nvb = 0, nva = 0, nvd = 0; uint32_t have = 0;
     for (uint32_t loc = 0; loc < 32; loc++) {
         if (!k.attr[loc].used) continue;
@@ -1663,7 +1696,7 @@ static VkDescriptorSet desc_set_alloc(VkDescriptorSetLayout dsl) {
     }
 }
 static void desc_flush(VkPipelineBindPoint bp, VkPipelineLayout pl, VkDescriptorSetLayout dsl) {
-    if (!g_nopush || !D.n) { D.n = 0; return; }
+    if (!g_np || !D.n) { D.n = 0; return; }
     VkDescriptorSet ds = desc_set_alloc(dsl);
     for (uint32_t i = 0; i < D.n; i++) D.w[i].dstSet = ds;
     vkUpdateDescriptorSets(g_dev, D.n, D.w, 0, NULL);
@@ -1674,7 +1707,7 @@ static void push_stage(vshader *s, int st, VkPipelineBindPoint bp, VkPipelineLay
     if (!s || !s->nres) return;
     VkWriteDescriptorSet w_[64]; VkDescriptorBufferInfo bi_[64]; VkDescriptorImageInfo ii_[64]; VkBufferView bv_[64]; uint32_t nw = 0;
     VkWriteDescriptorSet *w = w_; VkDescriptorBufferInfo *bi = bi_; VkDescriptorImageInfo *ii = ii_; VkBufferView *bv = bv_;
-    if (g_nopush) { if (D.n + 64 > 320) D.n = 320 - 64; w = D.w + D.n; bi = D.bi + D.n; ii = D.ii + D.n; bv = D.bv + D.n; }
+    if (g_np) { if (D.n + 64 > 320) D.n = 320 - 64; w = D.w + D.n; bi = D.bi + D.n; ii = D.ii + D.n; bv = D.bv + D.n; }
     pthread_mutex_lock(&g_rmu);
     for (int i = 0; i < s->nres; i++) {
         const spv_res *r = &s->res[i]; const vres_how *h = &s->how[i];
@@ -1753,7 +1786,7 @@ static void push_stage(vshader *s, int st, VkPipelineBindPoint bp, VkPipelineLay
         }
     }
     pthread_mutex_unlock(&g_rmu);
-    if (g_nopush) D.n += nw;
+    if (g_np) D.n += nw;
     else if (nw) p_push(CB(), bp, pl, 0, nw, w);
 }
 
@@ -1763,7 +1796,26 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
     if ((dw && dw->mdi_cnt) || (di && di->mdi_cnt)) { uint64_t a = dw ? dw->mdi_cnt : di->mdi_cnt; int i = dw ? dw->mdi_i : di->mdi_i; uint32_t n = 0; memcpy(&n, (const void *)(uintptr_t)a, 4); if ((uint32_t)i >= n) return; }
     if (!S.prog) { RED_ONCE(33, "draw with no program bound"); return; }
     vprog *pr = prog_get(S.prog); if (!pr->sh[0]) { RED_ONCE(34, "program has no vertex shader (or it is not mapped)"); return; }
-    if (S.poly.cull == NVN_FACE_FRONT_AND_BACK) return;
+    // Rasterizer discard: the vertex stage alone. With transform feedback active the draw captures its outputs (the shader's capture variant stores them into the bound
+    // feedback buffers, as nvn_mtl.m tf_draw: Pokémon Legends: Arceus / Z-A skin characters so); otherwise it changes nothing and is skipped
+    VkBuffer tfb[4] = {0}; VkDeviceSize tfo[4] = {0}, tfr[4] = {0}; uint32_t tfpc[5] = {0}; int tfcap = 0;
+    if (S.rast_discard) {
+        vshader *vs = pr->sh[0];
+        if (!S.tf_on) return;
+        if (!vs->tfmod) { RED_ONCE(100, "transform feedback with vertex shader %s, which has no capture variant: nothing captured", vs->key); return; }
+        if (!dw || dw->ind || dw->mdi_cnt || dw->instances > 1 || dw->prim == 6 || dw->prim == 7) { RED_ONCE(101, "transform feedback draw that is indexed, indirect, instanced or a fan / quad list (vertex %s): not captured", vs->key); return; }
+        if (dw->count <= 0) return;
+        VkDeviceSize al = g_props.limits.minStorageBufferOffsetAlignment ? g_props.limits.minStorageBufferOffsetAlignment : 256;
+        tfpc[0] = (uint32_t)dw->first;
+        for (int b = 0; b < 4; b++) { if (!vs->tf_stride[b]) continue;
+            uint64_t n = (uint64_t)dw->count * vs->tf_stride[b], at = S.tf[b].addr + S.tf_off[b]; VkDeviceSize o;
+            if (!S.tf[b].addr || S.tf_off[b] + n > S.tf[b].size || !pool_buf(at, n, &tfb[b], &o, NULL)) {
+                RED_ONCE(102, "transform feedback buffer %d of vertex %s is unbound, too small or in no memory pool (%#llx + %llu of %llu): not captured", b, vs->key, (unsigned long long)S.tf[b].addr, (unsigned long long)(S.tf_off[b] + n), (unsigned long long)S.tf[b].size);
+                return; }
+            tfo[b] = o & ~(al - 1); tfr[b] = o - tfo[b] + n; tfpc[1 + b] = (uint32_t)((o - tfo[b]) / 4); }   // bound at an aligned offset; the shader starts base[b] words in
+        tfcap = 1;
+    }
+    if (S.poly.cull == NVN_FACE_FRONT_AND_BACK && !tfcap) return;
     if (!pass_begin()) return;
     int prim = dw ? dw->prim : di->prim; VkPrimitiveTopology topo = topo_of(prim);
     VkPipeline p = pso_get(pr, topo); if (!p) return;
@@ -1802,8 +1854,26 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
         vs_[s_] = S.stream[s_].stride; }
     vb[16] = g_zero_buf; vo[16] = 0; vs_[16] = 0;
     vkCmdBindVertexBuffers2(cb, 0, 17, vb, vo, NULL, vs_);
-    VkPipelineLayout pl = prog_layout(pr, 0);
+    VkPipelineLayout pl = prog_layout(pr, 0); g_np = pr->np[0];
     for (int st = 0; st < 5; st++) push_stage(pr->sh[st], st, VK_PIPELINE_BIND_POINT_GRAPHICS, pl);
+    if (tfcap) {   // the capture buffers, then the draw, then its writes made visible to what reads them (vertex streams, shaders, copies)
+        VkWriteDescriptorSet w_[4]; VkDescriptorBufferInfo bi_[4]; uint32_t nw = 0;
+        VkWriteDescriptorSet *w = w_; VkDescriptorBufferInfo *bi = bi_;
+        if (g_np) { if (D.n + 4 > 320) D.n = 316; w = D.w + D.n; bi = D.bi + D.n; }
+        for (int b = 0; b < 4; b++) if (tfb[b]) { bi[nw] = (VkDescriptorBufferInfo){ tfb[b], tfo[b], tfr[b] };
+            w[nw] = (VkWriteDescriptorSet){ .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstBinding = TF_BIND + (uint32_t)b, .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .pBufferInfo = &bi[nw] }; nw++; }
+        if (g_np) D.n += nw; else if (nw) p_push(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pl, 0, nw, w);
+        desc_flush(VK_PIPELINE_BIND_POINT_GRAPHICS, pl, pr->dsl[0]);
+        vkCmdPushConstants(cb, pl, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof tfpc, tfpc);
+        vkCmdDraw(cb, (uint32_t)dw->count, 1, (uint32_t)dw->first, (uint32_t)dw->base_instance);
+        vshader *vs = pr->sh[0];
+        for (int b = 0; b < 4; b++) if (tfb[b]) { uint64_t n = (uint64_t)dw->count * vs->tf_stride[b]; wb_note(S.tf[b].addr + S.tf_off[b], n); S.tf_off[b] += n; }
+        pass_end();
+        VkMemoryBarrier mb = { .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER, .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT, .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT };
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &mb, 0, NULL, 0, NULL);
+        { static int once; if (!once++) VLOG("transform feedback: first capture (vertex %s, %d vertices)", vs->key, dw->count); }
+        return;
+    }
     desc_flush(VK_PIPELINE_BIND_POINT_GRAPHICS, pl, pr->dsl[0]);
     uint32_t inst = (uint32_t)((dw ? dw->instances : di->instances) > 0 ? (dw ? dw->instances : di->instances) : 1);
     if ((dw && dw->ind) || (di && di->ind)) {
@@ -1850,7 +1920,7 @@ static nvn_hmap g_cps = {.klen = sizeof(void *)};
 static void dispatch(const p_dispatch *dp) {
     if (!S.cprog) { RED_ONCE(39, "dispatch with no program bound"); return; }
     vprog *pr = prog_get(S.cprog); vshader *cs = pr->sh[5]; if (!cs) { RED_ONCE(40, "dispatched program has no compute shader (or it is not mapped)"); return; }
-    VkPipelineLayout pl = prog_layout(pr, 1);
+    VkPipelineLayout pl = prog_layout(pr, 1); g_np = pr->np[1];
     void *key = pr; VkPipeline p = nvn_hm_get(&g_cps, &key);
     if (!p) { VkComputePipelineCreateInfo ci = { .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO, .stage = { .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_COMPUTE_BIT, .module = cs->mod, .pName = "main" }, .layout = pl };
         if (vkCreateComputePipelines(g_dev, g_pcache, 1, &ci, NULL, &p)) { VLOG("[RED] compute pipeline %s failed", cs->key); return; }
@@ -1990,7 +2060,9 @@ static int state_op(uint32_t op, const void *a) {
         case OP_BLEND_COLOR: memcpy(S.blend_color, ((const p_blend_color *)a)->rgba, 16); break;
         case OP_COPY_STRIDE: { const p_copy_stride *cs = a; if (cs->image) S.copy_img_stride = cs->stride; else S.copy_stride = cs->stride; break; }
         case OP_RAST_DISCARD: S.rast_discard = ((const p_rast_discard *)a)->on; break;
-        case OP_TF_BIND: case OP_TF_STATE: RED_ONCE(51, "transform feedback not implemented"); break;
+        case OP_TF_BIND: { const p_tf_bind *b = a; if (b->index >= 0 && b->index < 4) S.tf[b->index] = *b; break; }
+        case OP_TF_STATE: { const p_tf_state *b = a;   // Begin writes from the start of each buffer; Pause / Resume keep the offsets (as nvn_mtl.m: the host keeps them, the game's control buffer is not used)
+            if (b->what == 0) { S.tf_on = 1; memset(S.tf_off, 0, sizeof S.tf_off); } else S.tf_on = b->what == 3; break; }
         default: return 0;
     }
     return 1;
