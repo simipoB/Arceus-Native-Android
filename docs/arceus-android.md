@@ -18,7 +18,7 @@ graphics are replayed on Vulkan, one `.apks` holds the app and the game files.
 
 ## What it took to boot (all in the repo)
 
-- **Allocator address space:** the global StandardAllocator reserves 32 GB (`main+0x2b4faec`), cut to 4 GB; plus the SDK's 1 GB node area cut
+- **Allocator address space:** the global StandardAllocator reserves 32 GB (`main+0x2b4faec`), cut to 3.5 GB (4 GB fit only when the host put the guest block at one address); plus the SDK's 1 GB node area cut
   (`sdk+0x34e048`). Both are in `dm/tools/patch_nso.py` by build ID. The profile has `mem_reserve 0x160000000`, `mem_alias 0x138000000`
   and `mem_map_limit on`.
 - **Shared font:** the game hands the font straight to the font engine like SDK 10 games do (profile `shared_font ttf`).

@@ -140,9 +140,11 @@ CUTS = {
     (0x34e0e4, '09fca752', '097ca052', 'AddressRegionManager constructor: length of the node area registered as an occupied region mov w9,#0x3fe00000 → mov w9,#0x3e00000'),
   ],
   # Pokémon Legends: Arceus 1.1.1 (v262144) main: nninitStartup (main+0x2779d20) reaches the global StandardAllocator's first use (main+0x2b4fac0, a guarded static) which initializes it with
-  # virtual address memory over 32 GB of address space; a host alias region holds a few GB, so Initialize aborted in nninitStartup. As with Z-A the pool bounds what it maps (profile mem_map_limit)
+  # virtual address memory over 32 GB of address space; a host alias region holds a few GB, so Initialize aborted in nninitStartup. As with Z-A the pool bounds what it maps (profile mem_map_limit).
+  # 3.5 GB, not 4: the region allocator aligns a block of 1 GB or more to 1 GB, and where the host's guest block lands decides how much that wastes (up to 1 GB); 3.5 GB + 1 GB + the
+  # 62 MB node area fits the 4.875 GB alias region anywhere (4 GB did only when the block sat at 0x300000000), and holds nninitStartup's probe of pool − used (3.15 GB of the 3.21 GB pool)
   'aee8f150dda1b5a838806e1a5ea6827a': [
-    (0x2b4faec, '0201c0d2', '2200c0d2', 'StandardAllocator::Initialize(nullptr, size): address space mov x2,#0x800000000 → mov x2,#0x100000000 (32 GB → 4 GB)'),
+    (0x2b4faec, '0201c0d2', '0200bcd2', 'StandardAllocator::Initialize(nullptr, size): address space mov x2,#0x800000000 → mov x2,#0xe0000000 (32 GB → 3.5 GB)'),
   ],
   # The Legend of Zelda: Link's Awakening 1.1.0 (v131072) main: the physics step (main+0x15730, main thread) rebuilds each world's PhysX completion task in place
   # (a PxLightCpuTask at world+0xc8) and passes it to simulate. A worker runs it (main+0x10ccf80: fetchResults, world+0x1d8 done = 1, notify, unlock) and then calls its
