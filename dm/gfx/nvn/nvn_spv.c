@@ -412,3 +412,24 @@ uint32_t *spv_tf_variant(const uint32_t *code, size_t words, const int tf[4][2],
     o[3] = nb; *out_words = w;
     return o;
 }
+
+// Storage images without a format that the shader writes / reads need StorageImageWriteWithoutFormat / StorageImageReadWithoutFormat, which the translator does not always
+// declare (Pokémon Legends: Arceus compute shaders: spirv-val error on OpImageWrite; a strict driver may refuse the module). A copy with the missing ones added; NULL if none is missing
+uint32_t *spv_image_caps(const uint32_t *code, size_t words, size_t *out_words) {
+    if (words < 5 || code[0] != 0x07230203u) return NULL;
+    int has_w = 0, has_r = 0, unfmt = 0, wr = 0, rd = 0; size_t last_cap = 0;
+    for (size_t i = 5; i < words;) { uint32_t n = code[i] >> 16, op = code[i] & 0xffff; if (!n || i + n > words) return NULL; const uint32_t *x = code + i;
+        if (op == 17 /* OpCapability */ && n == 2) { if (x[1] == 56) has_w = 1; if (x[1] == 55) has_r = 1; last_cap = i + n; }
+        else if (op == OpTypeImage && n >= 9 && x[7] == 2 && x[8] == 0) unfmt = 1;   // a storage image with format Unknown
+        else if (op == 99 /* OpImageWrite */) wr = 1;
+        else if (op == 98 /* OpImageRead */) rd = 1;
+        i += n; }
+    int add_w = unfmt && wr && !has_w, add_r = unfmt && rd && !has_r;
+    if (!(add_w || add_r) || !last_cap) return NULL;
+    uint32_t *o = malloc(4 * (words + 4)); size_t w = 0;
+    memcpy(o, code, 4 * last_cap); w = last_cap;
+    if (add_w) { o[w++] = 2u << 16 | 17; o[w++] = 56; }
+    if (add_r) { o[w++] = 2u << 16 | 17; o[w++] = 55; }
+    memcpy(o + w, code + last_cap, 4 * (words - last_cap)); w += words - last_cap;
+    *out_words = w; return o;
+}

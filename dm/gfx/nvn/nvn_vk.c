@@ -1234,6 +1234,7 @@ static vshader *shader_load(const uint8_t key[8], int st) {
     free(c1); free(meta);
     if (s->shift) spv_rebind(code, ns / 4, s->shift);
     ns = spv_strip_unused(code, ns / 4) * 4;   // capabilities declared but unused (Float64, fragment interlock): strict drivers refuse or mis-handle them
+    { size_t nw; uint32_t *c2 = spv_image_caps(code, ns / 4, &nw); if (c2) { free(code); code = c2; ns = nw * 4; } }   // and the format-less storage image ones they need
     if (spst == 0 || spst == 2) { size_t nw; uint32_t *c2 = spv_init_outputs(code, ns / 4, &nw); if (c2) { free(code); code = c2; ns = nw * 4; } }   // outputs start at (0, 0, 0, 1) as on the hardware
     if (st == 1) spv_frag_outputs(code, ns / 4, s->out_cls);
     spv_io_masks(code, ns / 4, &s->in_mask, &s->out_mask);
@@ -1377,6 +1378,13 @@ static void td_note(vtex *x, uint64_t ser, uint32_t lv, uint32_t sl) {
     if ((long)g_frame_no != g_td_frame || g_ntd >= 256) return;
     for (int i = 0; i < g_ntd; i++) if (g_td[i].ser == ser && g_td[i].lv == lv && g_td[i].sl == sl) return;
     vtex_ref(x); g_td[g_ntd].x = x; g_td[g_ntd].ser = ser; g_td[g_ntd].lv = lv; g_td[g_ntd].sl = sl; g_ntd++;
+}
+// A transform feedback capture runs in a 1x1 pass of its own with no attachments (as nvn_mtl.m tf_draw's encoder): its pipeline has rasterizer discard on, so it has no colour or
+// depth state, and inside the game's pass its attachment count would not match the pass (VUID-vkCmdDraw-colorAttachmentCount-06179). Ended by pass_end like any pass
+static void tf_pass_begin(void) {
+    pass_end(); memset(&P, 0, sizeof P);
+    VkRenderingInfo ri = { .sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, {1, 1}}, .layerCount = 1 };
+    vkCmdBeginRendering(CB(), &ri); P.open = 1; P.tw = P.th = 1; P.samples = 1;
 }
 static int pass_begin(void) {
     if (P.open) return 1;
@@ -1816,7 +1824,7 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
         tfcap = 1;
     }
     if (S.poly.cull == NVN_FACE_FRONT_AND_BACK && !tfcap) return;
-    if (!pass_begin()) return;
+    if (tfcap) tf_pass_begin(); else if (!pass_begin()) return;
     int prim = dw ? dw->prim : di->prim; VkPrimitiveTopology topo = topo_of(prim);
     VkPipeline p = pso_get(pr, topo); if (!p) return;
     VkCommandBuffer cb = CB();
@@ -1831,13 +1839,14 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
     if (v.minDepth < 0) v.minDepth = 0; if (v.minDepth > 1) v.minDepth = 1; if (v.maxDepth < 0) v.maxDepth = 0; if (v.maxDepth > 1) v.maxDepth = 1;
     vkCmdSetViewport(cb, 0, 1, &v);
     VkRect2D sc = {{0, 0}, {P.tw, P.th}};
-    if (R.has_sc) { long x0 = R.sc.x < 0 ? 0 : R.sc.x, y0 = R.sc.y < 0 ? 0 : R.sc.y, x1 = (long)R.sc.x + R.sc.w, y1 = (long)R.sc.y + R.sc.h; if (x1 > (long)P.tw) x1 = P.tw; if (y1 > (long)P.th) y1 = P.th;
+    if (R.has_sc && !tfcap) { long x0 = R.sc.x < 0 ? 0 : R.sc.x, y0 = R.sc.y < 0 ? 0 : R.sc.y, x1 = (long)R.sc.x + R.sc.w, y1 = (long)R.sc.y + R.sc.h; if (x1 > (long)P.tw) x1 = P.tw; if (y1 > (long)P.th) y1 = P.th;
         if (x1 <= x0 || y1 <= y0) return; sc = (VkRect2D){{(int32_t)x0, (int32_t)y0}, {(uint32_t)(x1 - x0), (uint32_t)(y1 - y0)}}; }
     vkCmdSetScissor(cb, 0, 1, &sc);
     vkCmdSetCullMode(cb, S.poly.cull == NVN_FACE_FRONT ? VK_CULL_MODE_FRONT_BIT : S.poly.cull == NVN_FACE_BACK ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE);
     int ccw = S.poly.front == NVN_FRONT_FACE_CCW; if (atomic_load(&g_origin_ll)) ccw = !ccw;   // lower-left: the y flip relative to GL window coordinates reverses the winding
     vkCmdSetFrontFace(cb, ccw ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE);
     vkCmdSetPrimitiveTopology(cb, topo);
+    if (!tfcap) {   // a capture pipeline (rasterizer discard) has no depth / stencil state to set (VUID-vkCmdDraw-None-08608)
     vkCmdSetDepthTestEnable(cb, P.hd && S.ds.dt); vkCmdSetDepthWriteEnable(cb, P.hd && S.ds.dw); vkCmdSetDepthCompareOp(cb, (VkCompareOp)(S.ds.df ? S.ds.df - 1 : 7));
     vkCmdSetStencilTestEnable(cb, P.hs && S.ds.st);
     vkCmdSetStencilOp(cb, VK_STENCIL_FACE_FRONT_BIT, (VkStencilOp)(S.ds.fail_f - 1), (VkStencilOp)(S.ds.zpass_f - 1), (VkStencilOp)(S.ds.zfail_f - 1), (VkCompareOp)(S.ds.sf_f - 1));
@@ -1847,6 +1856,7 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
     vkCmdSetStencilReference(cb, VK_STENCIL_FACE_FRONT_BIT, S.st_ref[0]); vkCmdSetStencilReference(cb, VK_STENCIL_FACE_BACK_BIT, S.st_ref[1]);
     if (S.poly.offset_en & 4) vkCmdSetDepthBias(cb, S.po.units, S.po.clamp, S.po.factor); else vkCmdSetDepthBias(cb, 0, 0, 0);
     vkCmdSetBlendConstants(cb, S.blend_color);
+    }
     // vertex streams: the pool buffers at their addresses, strides from the stream state; binding 16 = zeros for unbound attributes
     VkBuffer vb[17]; VkDeviceSize vo[17], vs_[17];
     for (int s_ = 0; s_ < 16; s_++) { VkBuffer b; VkDeviceSize o;
