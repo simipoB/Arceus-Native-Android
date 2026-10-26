@@ -8,6 +8,12 @@
 // touch areas are 1.3 times the drawing; a thumb sliding across the face buttons presses the one under it. Hidden while a controller is used, back on the next touch.
 // The layout and drawing parts also build into the Mac Vulkan host (mac_vk_build.sh), whose DM_OVL_SHOT composes them over a game frame to check the look.
 #include "dm.h"
+#include "game_profile.h"   // DM_GAME_TOUCH_ZLZR (the profile key touch_zlzr)
+#if defined(DM_GAME_TOUCH_MENU) && DM_GAME_TOUCH_MENU
+#define GESTURES_ON 1   // the throw button and the touch gestures (touch_ui_event): the games with touch menus (Legends: Arceus)
+#else
+#define GESTURES_ON 0
+#endif
 #include "dm_input.h"
 #include "nvn_ovl.h"
 #ifdef __ANDROID__
@@ -21,11 +27,11 @@
 #include <string.h>
 #include <time.h>
 
-enum { C_STICK, C_CAM, C_RSTICK, C_A, C_B, C_X, C_Y, C_L, C_R, C_ZL, C_ZR, C_PLUS, C_MINUS, C_UP, C_DOWN, C_LEFT, C_RIGHT, NCTL };
+enum { C_STICK, C_CAM, C_RSTICK, C_A, C_B, C_X, C_Y, C_L, C_R, C_ZL, C_ZR, C_PLUS, C_MINUS, C_UP, C_DOWN, C_LEFT, C_RIGHT, C_THROW, NCTL };
 typedef struct { float cx, cy, r; int glyph, shown; uint64_t btn; } ctl;
 static ctl g_c[NCTL];
 static float g_w, g_h;
-static struct { int32_t id; int target; float x0, y0, x, y, lx, ly; double lt; } g_ptr[10];   // fingers down: id, what they hold, where, last move (camera)
+static struct { int32_t id; int target; float x0, y0, x, y, lx, ly; double lt, t0; int thr, lp; } g_ptr[10];   // (thr: this finger's swipe became a throw)   // (t0: when the finger landed)   // fingers down: id, what they hold, where, last move (camera)
 static uint64_t g_btn; static int32_t g_lx, g_ly, g_rx, g_ry;
 static double g_held_until[NCTL];                   // the 80 ms minimum press
 static float g_cam_vx, g_cam_vy; static double g_cam_t;   // the camera finger's speed (pixels / s) and when it last moved
@@ -33,6 +39,13 @@ static float g_stick_x, g_stick_y, g_knob_x, g_knob_y; static int g_stick_on;
 static float g_rknob_x, g_rknob_y; static int g_rstick_on;
 static double g_inner_t;   // the last touch of the D-pad or the right stick   // the right stick: its base stays put, the knob follows the thumb
 static int g_visible = 1;
+static double g_touch_t; static double g_two_t, g_tap_mute;   // two-finger tap: when the second finger landed; single taps ignored until g_tap_mute
+int touch_menu_active(void);   // touch_menu.c: one of the game's menus shows
+#if defined(DM_GAME_TOUCH_MENU) && DM_GAME_TOUCH_MENU
+enum { GESTURES = 1 };   // tap = A in the world, swipe up = throw: only where menu taps work too (else a tap in a menu would press A on whatever is selected)
+#else
+enum { GESTURES = 0 };
+#endif   // the last touch anywhere: every control fades 3 s after it (they cover the game's own menus and text)
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static double now_s(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
 static float clampf(float v, float lo, float hi) { return v < lo ? lo : v > hi ? hi : v; }
@@ -50,8 +63,14 @@ static void layout(float w, float h) {
     g_c[C_Y] = (ctl){ fx - gap, fy, br, OVL_G_Y, 1, DM_BTN_Y };
     g_c[C_L] = (ctl){ 0.25f * s, 0.30f * s, sr, OVL_G_L, 1, DM_BTN_L };
     g_c[C_R] = (ctl){ w - 0.25f * s, 0.30f * s, sr, OVL_G_R, 1, DM_BTN_R };
-    g_c[C_ZL] = (ctl){ 0.26f * s, 0.10f * s, sr * 0.8f, OVL_G_ZL, 0, DM_BTN_ZL };   // (Shield does not use ZL / ZR: off)
+    // ZL / ZR above L / R where the game uses them (profile key touch_zlzr: Legends: Arceus aims with ZL and throws with ZR); hidden otherwise (Shield)
+#if defined(DM_GAME_TOUCH_ZLZR) && DM_GAME_TOUCH_ZLZR
+    g_c[C_ZL] = (ctl){ 0.25f * s, 0.11f * s, sr, OVL_G_ZL, 1, DM_BTN_ZL };
+    g_c[C_ZR] = (ctl){ w - 0.25f * s, 0.11f * s, sr, OVL_G_ZR, 1, DM_BTN_ZR };
+#else
+    g_c[C_ZL] = (ctl){ 0.26f * s, 0.10f * s, sr * 0.8f, OVL_G_ZL, 0, DM_BTN_ZL };
     g_c[C_ZR] = (ctl){ w - 0.26f * s, 0.10f * s, sr * 0.8f, OVL_G_ZR, 0, DM_BTN_ZR };
+#endif
     g_c[C_MINUS] = (ctl){ w * 0.5f - 0.13f * s, 0.06f * s, mr, OVL_G_MINUS, 1, DM_BTN_MINUS };
     g_c[C_PLUS] = (ctl){ w * 0.5f + 0.13f * s, 0.06f * s, mr, OVL_G_PLUS, 1, DM_BTN_PLUS };
     g_c[C_STICK] = (ctl){ 0.36f * s, h - 0.27f * s, 0.14f * s, OVL_G_NONE, 1, 0 };
@@ -60,7 +79,11 @@ static void layout(float w, float h) {
         g_c[C_UP] = (ctl){ dx, dy - dg, dr, OVL_G_NONE, 1, DM_BTN_UP }; g_c[C_DOWN] = (ctl){ dx, dy + dg, dr, OVL_G_NONE, 1, DM_BTN_DOWN };
         g_c[C_LEFT] = (ctl){ dx - dg, dy, dr, OVL_G_NONE, 1, DM_BTN_LEFT }; g_c[C_RIGHT] = (ctl){ dx + dg, dy, dr, OVL_G_NONE, 1, DM_BTN_RIGHT };
     }
+    // THROW (Legends: Arceus): a Poké Ball where the right thumb rests, above-left of A B X Y: held = ZR (aim, the finger's drag turns the aim), released = throw
+    g_c[C_THROW] = (ctl){ w - 0.66f * s, h - 0.56f * s, 0.10f * s, OVL_G_NONE, GESTURES_ON, DM_BTN_ZR };
     g_c[C_RSTICK] = (ctl){ w - 0.80f * s, h - 0.19f * s, 0.11f * s, OVL_G_NONE, 1, 0 };
+    // touch-first games (Legends: Arceus): only the movement stick and − / + on screen; everything else is touch on the game itself (touch_ui_event's gestures, touch_menu.c)
+    if (GESTURES_ON) for (int c = C_RSTICK; c < NCTL; c++) if (c != C_PLUS && c != C_MINUS) g_c[c].shown = 0;
     if (!g_rstick_on) { g_rknob_x = g_c[C_RSTICK].cx; g_rknob_y = g_c[C_RSTICK].cy; }
     if (!g_stick_on) { g_stick_x = g_knob_x = g_c[C_STICK].cx; g_stick_y = g_knob_y = g_c[C_STICK].cy; }
 }
@@ -78,6 +101,7 @@ static int target_at(float x, float y) {
 static int32_t ax(float v) { v = clampf(v, -1, 1); return (int32_t)(v * DM_STICK_MAX); }
 
 #ifdef __ANDROID__
+void touch_menu_tap(float x, float y, float w, float h);   // touch_menu.c
 // ---------- haptics ----------
 static JavaVM *g_vm; static jobject g_act; static pthread_cond_t g_hcv = PTHREAD_COND_INITIALIZER; static int g_hpend;
 static void *haptic_main(void *p) {
@@ -123,6 +147,10 @@ static void recompute_locked(void) {
         else if (c >= C_A) b |= g_c[c].btn;
     }
     for (int c = C_A; c < NCTL; c++) if (t < g_held_until[c]) b |= g_c[c].btn;
+    for (int i = 0; i < 10; i++) if (g_ptr[i].id >= 0 && g_ptr[i].thr) b |= DM_BTN_ZR;
+    for (int i = 0; i < 10; i++) if (GESTURES_ON && g_ptr[i].id >= 0 && g_ptr[i].target == C_CAM && !g_ptr[i].thr && !touch_menu_active() && t - g_ptr[i].t0 > 0.45 &&
+                                     fabsf(g_ptr[i].x - g_ptr[i].x0) < g_h * 0.03f && fabsf(g_ptr[i].y - g_ptr[i].y0) < g_h * 0.03f) { g_ptr[i].lp = 1; b |= DM_BTN_ZL; }   // press and hold: ZL (lock on)
+    for (int i = 0; i < 10; i++) if (g_ptr[i].id >= 0 && g_ptr[i].lp) b |= DM_BTN_ZL;   // a throw swipe holds ZR (aim) until the finger lifts (throw)
     if (rstick || (b & (DM_BTN_UP | DM_BTN_DOWN | DM_BTN_LEFT | DM_BTN_RIGHT))) g_inner_t = t;   // held: stays clear
     g_rstick_on = rstick; if (!rstick) { g_rknob_x = g_c[C_RSTICK].cx; g_rknob_y = g_c[C_RSTICK].cy; }
     if (!stick) { g_stick_on = 0; g_stick_x = g_knob_x = g_c[C_STICK].cx; g_stick_y = g_knob_y = g_c[C_STICK].cy; }
@@ -133,7 +161,7 @@ static void recompute_locked(void) {
 // Returns the touch buttons and sticks (for the host's touch source) after this event
 void touch_ui_event(const AInputEvent *e, float w, float h, uint64_t *btn, int32_t s[4]) {
     pthread_mutex_lock(&g_mu);
-    layout(w, h); g_visible = 1;
+    layout(w, h); g_visible = 1; g_touch_t = now_s();
     int32_t act = AMotionEvent_getAction(e) & AMOTION_EVENT_ACTION_MASK;
     size_t idx = (size_t)((AMotionEvent_getAction(e) & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK) >> AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT);
     uint64_t before = g_btn;
@@ -143,14 +171,31 @@ void touch_ui_event(const AInputEvent *e, float w, float h, uint64_t *btn, int32
         if (act == AMOTION_EVENT_ACTION_DOWN) for (int i = 0; i < 10; i++) g_ptr[i].id = -1;
         int t = target_at(x, y);
         if (t >= 0) for (int i = 0; i < 10; i++) if (g_ptr[i].id < 0) {
-            g_ptr[i].id = AMotionEvent_getPointerId(e, k); g_ptr[i].target = t; g_ptr[i].x0 = g_ptr[i].x = g_ptr[i].lx = x; g_ptr[i].y0 = g_ptr[i].y = g_ptr[i].ly = y; g_ptr[i].lt = now_s();
+            if (t == C_STICK || t == C_CAM) for (int j = 0; j < 10; j++) if (g_ptr[j].id >= 0 && (g_ptr[j].target == C_STICK || g_ptr[j].target == C_CAM) && now_s() - g_ptr[j].t0 < 0.25) g_two_t = now_s();
+            g_ptr[i].thr = g_ptr[i].lp = 0; g_ptr[i].id = AMotionEvent_getPointerId(e, k); g_ptr[i].target = t; g_ptr[i].x0 = g_ptr[i].x = g_ptr[i].lx = x; g_ptr[i].y0 = g_ptr[i].y = g_ptr[i].ly = y; g_ptr[i].lt = g_ptr[i].t0 = now_s();
             if (t >= C_A) g_held_until[t] = now_s() + 0.08;
-            if (t == C_RSTICK || t >= C_UP) g_inner_t = now_s();
+            if (t == C_RSTICK || (t >= C_UP && t <= C_RIGHT)) g_inner_t = now_s();
             if (t == C_STICK) { float r = g_c[C_STICK].r; g_stick_on = 1;   // the base comes to the thumb, kept on screen
-                g_stick_x = clampf(x, r, g_w * 0.42f); g_stick_y = clampf(y, g_h * 0.30f + r * 0.5f, g_h - r); }
+                (void)r; g_stick_x = g_c[C_STICK].cx; g_stick_y = g_c[C_STICK].cy; }   // fixed, as on a Joy-Con: the thumb's offset from the base is the tilt
             break; }
     } else if (act == AMOTION_EVENT_ACTION_UP || act == AMOTION_EVENT_ACTION_POINTER_UP) {
         int32_t id = AMotionEvent_getPointerId(e, act == AMOTION_EVENT_ACTION_UP ? 0 : idx);
+        // gestures outside the controls (stick or camera area): a quick tap (under 0.25 s, barely moved) is a tap on a menu item while a menu shows (touch_menu.c),
+        // else, on the camera side, A (talk, pick up, investigate); two fingers tapping together are B (back)
+        for (int i = 0; i < 10; i++) if (g_ptr[i].id == id && (g_ptr[i].target == C_STICK || g_ptr[i].target == C_CAM) && !g_ptr[i].thr && now_s() - g_ptr[i].t0 < 0.3 &&
+                                         fabsf(g_ptr[i].x - g_ptr[i].x0) < g_h * 0.02f && fabsf(g_ptr[i].y - g_ptr[i].y0) < g_h * 0.02f) {
+            double t = now_s();
+            if (t - g_two_t < 0.4) { g_two_t = 0; g_tap_mute = t + 0.3; dm_input_press(DM_BTN_B, 80000000ull); click_locked(); }
+            else if (t >= g_tap_mute && !g_ptr[i].lp) { static int dg = -1; if (dg < 0) dg = getenv("DM_TOUCH_DIAG") != NULL; if (dg && !touch_menu_active()) touch_menu_tap(g_ptr[i].x0, g_ptr[i].y0, g_w, g_h);   // (diagnosis: what is under the tap)
+                if (touch_menu_active()) touch_menu_tap(g_ptr[i].x0, g_ptr[i].y0, g_w, g_h); else if (GESTURES && g_ptr[i].target == C_CAM) { dm_input_press(DM_BTN_A, 80000000ull); click_locked(); } }
+        }
+        // quick swipes on the camera side (under 0.35 s, a tenth of the screen height or more): left / right = L / R (the item or Pokémon), down = X (items / Pokémon)
+        for (int i = 0; i < 10; i++) if (GESTURES && g_ptr[i].id == id && g_ptr[i].target == C_CAM && !g_ptr[i].thr && !g_ptr[i].lp && now_s() - g_ptr[i].t0 < 0.35 && !touch_menu_active()) {
+            float sx = g_ptr[i].x - g_ptr[i].x0, sy = g_ptr[i].y - g_ptr[i].y0; uint64_t sb = 0;
+            if (fabsf(sx) > g_h * 0.10f && fabsf(sy) < fabsf(sx) * 0.6f) sb = sx > 0 ? DM_BTN_R : DM_BTN_L;
+            else if (sy > g_h * 0.10f && fabsf(sx) < sy * 0.6f) sb = DM_BTN_X;
+            if (sb) { dm_input_press(sb, 80000000ull); click_locked(); g_cam_vx = g_cam_vy = 0; }
+        }
         for (int i = 0; i < 10; i++) if (g_ptr[i].id == id) { if (g_ptr[i].target == C_CAM) g_cam_vx = g_cam_vy = 0; g_ptr[i].id = -1; }
     }
     if (act == AMOTION_EVENT_ACTION_MOVE || act == AMOTION_EVENT_ACTION_DOWN || act == AMOTION_EVENT_ACTION_POINTER_DOWN)
@@ -158,7 +203,10 @@ void touch_ui_event(const AInputEvent *e, float w, float h, uint64_t *btn, int32
             int32_t id = AMotionEvent_getPointerId(e, k);
             for (int i = 0; i < 10; i++) if (g_ptr[i].id == id) {
                 g_ptr[i].x = AMotionEvent_getX(e, k); g_ptr[i].y = AMotionEvent_getY(e, k);
-                if (g_ptr[i].target == C_CAM && act == AMOTION_EVENT_ACTION_MOVE) {   // the finger's speed, smoothed over the last few moves
+                if (g_ptr[i].target == C_CAM && !g_ptr[i].thr && act == AMOTION_EVENT_ACTION_MOVE && GESTURES && now_s() - g_ptr[i].t0 < 0.3 && !touch_menu_active()) {   // a quick swipe up: a throw
+                    float up = g_ptr[i].y0 - g_ptr[i].y; if (up > g_h * 0.10f && fabsf(g_ptr[i].x - g_ptr[i].x0) < up * 0.5f) { g_ptr[i].thr = 1; g_cam_vx = g_cam_vy = 0; click_locked(); }
+                }
+                if ((g_ptr[i].target == C_CAM || g_ptr[i].target == C_THROW) && !g_ptr[i].thr && act == AMOTION_EVENT_ACTION_MOVE) {   // the finger's speed, smoothed (the throw button's finger aims)
                     double t = now_s(), dt = t - g_ptr[i].lt;
                     if (dt > 0.001) { float vx = (g_ptr[i].x - g_ptr[i].lx) / (float)dt, vy = (g_ptr[i].y - g_ptr[i].ly) / (float)dt;
                         g_cam_vx = g_cam_vx * 0.5f + vx * 0.5f; g_cam_vy = g_cam_vy * 0.5f + vy * 0.5f; g_cam_t = t;
@@ -210,7 +258,20 @@ static void bubble(dm_ovl_item *it, int *n, int max, const ctl *c, int on, int t
     add(it, n, max, x, y + r * 0.22f, r * 0.62f, OVL_DISC, br + 30, bg + 40, bb + 30, 0.35f * a);
     add(it, n, max, x - r * 0.30f, y - r * 0.40f, r * 0.24f, OVL_DISC, 255, 255, 255, 0.28f * a);
     dm_ovl_item *o = add(it, n, max, x, y, r * 0.90f, OVL_RING, 185, 232, 255, 0.95f * a); if (o) o->ring = clampf(2.8f * th / (r * 0.9f), 0.02f, 0.2f);
-    o = add(it, n, max, x, y, r, OVL_DISC, 0, 0, 0, 0); if (o) { o->glyph = c->glyph; o->gscale = c->glyph == OVL_G_ZL || c->glyph == OVL_G_ZR ? 0.62f : 0.55f; o->galpha = 1; }
+    o = add(it, n, max, x, y, r, OVL_DISC, 0, 0, 0, 0); if (o) { o->glyph = c->glyph; o->gscale = c->glyph == OVL_G_ZL || c->glyph == OVL_G_ZR ? 0.62f : 0.55f; o->galpha = a; }
+}
+// the throw button: a Poké Ball (shadow, dark rim, red, a dark band, the white centre button), pressed = slightly smaller and brighter
+static void pokeball(dm_ovl_item *it, int *n, int max, const ctl *c, int on, float a) {
+    float r = on ? c->r * 0.93f : c->r, x = c->cx, y = c->cy, th = g_h / 1080.0f; int lift = on ? 40 : 0;
+    add(it, n, max, x, y + r * 0.07f, r * 1.03f, OVL_DISC, 5, 20, 40, 0.35f * a);
+    add(it, n, max, x, y, r, OVL_DISC, 30, 30, 36, 0.92f * a);
+    add(it, n, max, x, y, r * 0.90f, OVL_DISC, 225 + lift / 3, 40 + lift, 45 + lift, 0.95f * a);
+    add(it, n, max, x, y + r * 0.45f, r * 0.62f, OVL_DISC, 245, 245, 245, 0.55f * a);
+    dm_ovl_item *o = add(it, n, max, x, y, r * 0.90f, OVL_RRECT, 30, 30, 36, 0.95f * a); if (o) { o->y = y - r * 0.09f; o->h = r * 0.18f; o->radius = 0.5f; }
+    add(it, n, max, x, y, r * 0.30f, OVL_DISC, 30, 30, 36, 0.95f * a);
+    add(it, n, max, x, y, r * 0.21f, OVL_DISC, 250, 250, 250, 0.98f * a);
+    add(it, n, max, x - r * 0.32f, y - r * 0.45f, r * 0.18f, OVL_DISC, 255, 255, 255, 0.35f * a);
+    o = add(it, n, max, x, y, r, OVL_RING, 210, 225, 240, 0.9f * a); if (o) o->ring = clampf(2.6f * th / r, 0.01f, 0.2f);
 }
 // the stick: a ring with an inner ring, and a glossy knob
 static void compass(dm_ovl_item *it, int *n, int max, float a, float g_stick_x, float g_stick_y, float g_knob_x, float g_knob_y, float r) {   // (base, knob, radius)
@@ -229,13 +290,17 @@ int front_overlay(dm_ovl_item *it, int max, int width, int height) {
     frame_input_locked();
     int n = 0;
     if (g_visible) {
-        int faint = now_s() - g_inner_t > 2.0;   // the D-pad and the right stick fade 2 s after their last touch
+        double t = now_s(); int idle = (t - g_touch_t > 3.0 || touch_menu_active()) && !g_btn && !g_stick_on && !g_rstick_on;   // (in a menu its items are tapped directly)   // nothing touched for 3 s: everything faint
+        float ia = idle ? 0.22f : 1.0f;
+        int faint = t - g_inner_t > 2.0;   // the D-pad and the right stick fade 2 s after their last touch
         for (int c = C_A; c < NCTL; c++) { if (!g_c[c].shown) continue;
-            int on = (g_btn & g_c[c].btn) != 0; float al = c >= C_UP && faint && !on ? 0.25f : 1.0f; bubble(it, &n, max, &g_c[c], on, 0, al);
+            int on = (g_btn & g_c[c].btn) != 0; float al = c >= C_UP && c <= C_RIGHT && faint && !on ? 0.25f : 1.0f; if (idle) al = fminf(al, ia);
+            if (c == C_THROW) { pokeball(it, &n, max, &g_c[c], on, al); continue; }
+            bubble(it, &n, max, &g_c[c], on, 0, al);
             if (c >= C_UP && al == 1.0f) { float r = g_c[c].r, ox = c == C_LEFT ? -0.42f : c == C_RIGHT ? 0.42f : 0, oy = c == C_UP ? -0.42f : c == C_DOWN ? 0.42f : 0;
                 add(it, &n, max, g_c[c].cx + ox * r, g_c[c].cy + oy * r, r * 0.22f, OVL_DISC, 255, 255, 255, 0.9f); } }
-        compass(it, &n, max, g_stick_on ? 1.0f : 0.75f, g_stick_x, g_stick_y, g_knob_x, g_knob_y, g_c[C_STICK].r);
-        compass(it, &n, max, g_rstick_on ? 1.0f : faint ? 0.25f : 0.75f, g_c[C_RSTICK].cx,   // faint while unused: it and the D-pad sit over the dialogue box
+        compass(it, &n, max, g_stick_on ? 1.0f : idle ? ia : 0.75f, g_stick_x, g_stick_y, g_knob_x, g_knob_y, g_c[C_STICK].r);
+        if (g_c[C_RSTICK].shown) compass(it, &n, max, g_rstick_on ? 1.0f : idle ? ia : faint ? 0.25f : 0.75f, g_c[C_RSTICK].cx,   // faint while unused: it and the D-pad sit over the dialogue box
              g_c[C_RSTICK].cy, g_rknob_x, g_rknob_y, g_c[C_RSTICK].r);
     }
     pthread_mutex_unlock(&g_mu);

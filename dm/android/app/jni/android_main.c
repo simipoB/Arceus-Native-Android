@@ -22,10 +22,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
+#include <dirent.h>
+#include <fcntl.h>
+#include <time.h>
 #include <unistd.h>
 #include <math.h>
 #include "dm_input.h"
 #include "front.h"
+#include "game_profile.h"
 
 int dm_main(int argc, char **argv);   // dm/host/main.c built with -Dmain=dm_main
 void dm_focus_set(int st);
@@ -201,6 +206,57 @@ static void *log_mirror(void *p) {
     }
     return NULL;
 }
+// ---------- Memory inspector (development): request files in the files folder, answered every second while the game runs ----------
+//   scan.req   lines of 64-bit hex values: every 8-byte-aligned occurrence in the process's private writable memory → scan.out (address, value)
+//   peek.req   lines "<hex address> <hex length>": the bytes, as hex lines of 32 → peek.out
+//   tree.req   lines "<hex node> <hex bytes per node>": the UI node tree under the node (first child at +0x98, next sibling at +0x90; name hash at +0x68),
+//              each node's bytes as in peek.out, depth-first, at most 4000 nodes → tree.out
+// Reads go through process_vm_readv on this process, so a bad address is an error, not a crash. Used to map the game's UI node trees (the touch driver)
+#include <sys/uio.h>
+static ssize_t safe_read(uintptr_t a, void *buf, size_t n) {
+    struct iovec l = { buf, n }, r = { (void *)a, n }; return process_vm_readv(getpid(), &l, 1, &r, 1, 0);
+}
+static void inspector_scan(FILE *req, FILE *out) {
+    uint64_t want[64]; int nw = 0; char ln[128];
+    while (nw < 64 && fgets(ln, sizeof ln, req)) if (*ln != '#' && *ln > ' ') want[nw++] = strtoull(ln, NULL, 16);
+    FILE *m = fopen("/proc/self/maps", "r"); static uint64_t buf[1 << 17]; long hits = 0;
+    while (m && fgets(ln, sizeof ln, m) && hits < 20000) { unsigned long s, e; char pr[8] = "";
+        if (sscanf(ln, "%lx-%lx %7s", &s, &e, pr) != 3 || pr[0] != 'r' || pr[1] != 'w' || pr[3] != 'p') continue;
+        for (unsigned long a = s; a < e; a += sizeof buf) { size_t n = e - a < sizeof buf ? e - a : sizeof buf; if (safe_read(a, buf, n) != (ssize_t)n) continue;
+            for (size_t i = 0; i < n / 8; i++) for (int k = 0; k < nw; k++) if (buf[i] == want[k]) { fprintf(out, "%lx %016llx\n", a + i * 8, (unsigned long long)want[k]); hits++; } } }
+    if (m) fclose(m); fprintf(out, "# %ld hits\n", hits);
+}
+static void inspector_peek(FILE *req, FILE *out) {
+    char ln[128]; unsigned char b[32];
+    while (fgets(ln, sizeof ln, req)) { unsigned long a, n; if (sscanf(ln, "%lx %lx", &a, &n) != 2) continue; if (n > 1 << 20) n = 1 << 20;
+        fprintf(out, "@ %lx %lx\n", a, n);
+        for (unsigned long o = 0; o < n; o += 32) { size_t k = n - o < 32 ? n - o : 32; if (safe_read(a + o, b, k) != (ssize_t)k) { fprintf(out, "%lx unreadable\n", a + o); continue; }
+            fprintf(out, "%lx", a + o); for (size_t i = 0; i < k; i++) fprintf(out, "%s%02x", i % 8 ? "" : " ", b[i]); fputc('\n', out); } }
+}
+static void tree_walk(FILE *out, uintptr_t n, unsigned long per, int depth, int *count) {
+    for (int sib = 0; n && *count < 4000 && sib < 2000; sib++) {
+        uint64_t h = 0, child = 0, next = 0; unsigned char b[32];
+        if (safe_read(n + 0x68, &h, 8) != 8 || safe_read(n + 0x98, &child, 8) != 8 || safe_read(n + 0x90, &next, 8) != 8) { fprintf(out, "%*s! %lx unreadable\n", depth, "", (unsigned long)n); return; }
+        (*count)++; fprintf(out, "%*s@ %lx name %016llx depth %d\n", depth, "", (unsigned long)n, (unsigned long long)h, depth);
+        for (unsigned long o = 0; o < per; o += 32) { if (safe_read(n + o, b, 32) != 32) break;
+            fprintf(out, "%lx", (unsigned long)(n + o)); for (int i = 0; i < 32; i++) fprintf(out, "%s%02x", i % 8 ? "" : " ", b[i]); fputc('\n', out); }
+        if (child && depth < 40) tree_walk(out, (uintptr_t)child, per, depth + 1, count);
+        n = (uintptr_t)next;
+    }
+}
+static void inspector_tree(FILE *req, FILE *out) {
+    char ln[128]; while (fgets(ln, sizeof ln, req)) { unsigned long a, per; if (sscanf(ln, "%lx %lx", &a, &per) != 2) continue; if (per > 0x1000) per = 0x1000;
+        int count = 0; fprintf(out, "# tree %lx\n", a); tree_walk(out, a, per, 0, &count); fprintf(out, "# %d nodes\n", count); }
+}
+static void *inspector_main(void *p) {
+    (void)p; char q[1200], o[1200], t[1200];
+    for (;;) { sleep(1);
+        static const char *kind[3] = { "scan", "peek", "tree" };
+        for (int k = 0; k < 3; k++) { snprintf(q, sizeof q, "%s/%s.req", g_files, kind[k]); FILE *r = fopen(q, "r"); if (!r) continue;
+            snprintf(t, sizeof t, "%s/%s.tmp", g_files, kind[k]); snprintf(o, sizeof o, "%s/%s.out", g_files, kind[k]); FILE *w = fopen(t, "w");
+            if (w) { if (k == 2) inspector_tree(r, w); else if (k) inspector_peek(r, w); else inspector_scan(r, w); fclose(w); rename(t, o); } fclose(r); unlink(q); } }
+    return NULL;
+}
 static void host_start(void) {
     if (g_started++) return;
     const char *f = g_app->activity->externalDataPath; snprintf(g_files, sizeof g_files, "%s", f ? f : "/sdcard/nxnative");
@@ -210,19 +266,33 @@ static void host_start(void) {
     if (freopen(p, "w", stderr)) setvbuf(stderr, NULL, _IOLBF, 0);
     copy_file(q, DL "/PokemonShield-log-previous.txt");
     { pthread_t lt; if (!pthread_create(&lt, NULL, log_mirror, NULL)) pthread_detach(lt); }
+    { pthread_t it; if (!pthread_create(&it, NULL, inspector_main, NULL)) pthread_detach(it); }   // the memory inspector (scan.req / peek.req)
     snprintf(p, sizeof p, "%s/env.txt", g_files); env_file(p);
     // Game files: inside the installed APKs (the all-in-one .apks bundle, read through apkfs.c as /nxapk/...), else copied into the files folder
     struct stat st; int inapk = !stat("/nxapk/RomFS", &st);
     snprintf(g_game, sizeof g_game, "%s", inapk ? "/nxapk" : g_files);
     #define SETG(k, sub) do { snprintf(p, sizeof p, "%s/%s", g_game, sub); setenv(k, p, 0); } while (0)
     #define SETP(k, sub) do { snprintf(p, sizeof p, "%s/%s", g_files, sub); setenv(k, p, 0); } while (0)
-    setenv("DM_AUDIO", "1", 0);   // real sound output (AAudio, compat/aaudio_unit.c); env.txt can set 0
+    setenv("DM_AUDIO", "1", 0);
+#if defined(DM_GAME_ANDROID_OPMODE) && DM_GAME_ANDROID_OPMODE >= 0
+    { char m[4]; snprintf(m, sizeof m, "%d", DM_GAME_ANDROID_OPMODE); setenv("DM_OPMODE", m, 0); }   // the profile's android_op_mode (env.txt DM_OPMODE wins)
+#endif   // real sound output (AAudio, compat/aaudio_unit.c); env.txt can set 0
     // pipelines: every one the game makes is recorded here and built ahead at the next start, the list shipped with the game too, and the driver's compiled code kept
     SETP("DM_VK_PSO_RECORD", "vk_pipelines.bin"); SETP("DM_VK_PCACHE", "vk_pipeline_cache.bin"); SETG("DM_VK_PSO_SEED", "vk_pipelines_seed.bin");
     snprintf(q, sizeof q, "%s/shaders.pak", g_game); if (!stat(q, &st)) setenv("DM_SPV_PAK", q, 0);   // the packed shader set, else vk/b-<chain>/
     { snprintf(p, sizeof p, "%s/aoc", g_game); struct stat as; if (!stat(p, &as)) setenv("DM_AOC_DIR", p, 0); }   // the DLC the player owns (Shield: the Expansion Pass keys; its content is in the update)
     SETG("DM_ROMFS", "RomFS"); SETG("DM_SPV_DIR", "vk"); SETG("DM_NVN_SHMAP", "shader_map.tsv"); SETG("DM_FONT_DIR", "font");
     SETP("DM_SAVE", "save"); SETP("DM_TEMP", "temp");
+    // a save brought in from elsewhere (a Switch dump): files put in save_import/ (adb can write there, not into the app's own save/) replace the save at start;
+    // the old save is kept as save.before-import-<time>
+    { char imp[1200], old[1200], src[1300], dst[1300]; snprintf(imp, sizeof imp, "%s/save_import", g_files); struct stat is;
+      if (!stat(imp, &is) && S_ISDIR(is.st_mode)) {
+          snprintf(p, sizeof p, "%s/save", g_files); snprintf(old, sizeof old, "%s/save.before-import-%ld", g_files, (long)time(NULL)); rename(p, old); mkdir(p, 0755);
+          DIR *d = opendir(imp); struct dirent *de; int n = 0;
+          while (d && (de = readdir(d))) { if (de->d_name[0] == '.') continue; snprintf(src, sizeof src, "%s/%s", imp, de->d_name); snprintf(dst, sizeof dst, "%s/%s", p, de->d_name);
+              copy_file(src, dst); unlink(src); n++; }
+          if (d) closedir(d); rmdir(imp);
+          fprintf(stderr, "boot: save imported from save_import (%d files); the previous save is in %s\n", n, old); } }
     snprintf(p, sizeof p, "%s/save", g_files); mkdir(p, 0755); snprintf(p, sizeof p, "%s/temp", g_files); mkdir(p, 0755);
     snprintf(p, sizeof p, "%s/RomFS", g_game);
     if (stat(p, &st)) { fprintf(stderr, "boot: game files not found: %s (install the bundle, or copy RomFS, patched, shaders.pak, shader_map.tsv and font there)\n", p); ALOG("game files missing in %s", g_files); return; }
@@ -276,6 +346,18 @@ static void immersive(void) {
     (*e)->CallStaticVoidMethod(e, im, ap, g_app->activity->clazz);
     if ((*e)->ExceptionCheck(e)) { (*e)->ExceptionDescribe(e); (*e)->ExceptionClear(e); }
 }
+// Back from the background: the system may have swapped the game's memory out (Samsung's RAM Plus did, 586 MB), and every swapped page then came back on its own
+// fault in the middle of play (battles stuttered: frames of 100–160 ms). One thread asks for all of it back at once, ahead of the game (MADV_WILLNEED on the
+// private writable mappings: swapped pages are read back, pages never touched stay untouched)
+static void *swapin_main(void *p) {
+    (void)p; long before = kb_of("/proc/self/status", "VmSwap:"); FILE *f = fopen("/proc/self/maps", "r"); char ln[512]; double mb = 0;
+    while (f && fgets(ln, sizeof ln, f)) { unsigned long s, e; char pr[8] = "";
+        if (sscanf(ln, "%lx-%lx %7s", &s, &e, pr) == 3 && pr[0] == 'r' && pr[1] == 'w' && pr[3] == 'p') { madvise((void *)s, e - s, MADV_WILLNEED); mb += (e - s) / 1048576.0; } }
+    if (f) fclose(f);
+    sleep(3); fprintf(stderr, "[mem] back from the background: swap-in asked over %.0f MB of mappings, swapped %ld → %ld MB\n", mb, before / 1024, kb_of("/proc/self/status", "VmSwap:") / 1024);
+    return NULL;
+}
+static void swapin_start(void) { if (kb_of("/proc/self/status", "VmSwap:") < 32 * 1024) return; pthread_t t; if (!pthread_create(&t, NULL, swapin_main, NULL)) pthread_detach(t); }
 __attribute__((weak)) void nvn_vk_cache_save(void);   // the pipeline cache file (nvn_vk.c), written when the app goes to the background
 static void on_cmd(struct android_app *app, int32_t cmd) {
     switch (cmd) {
@@ -284,7 +366,7 @@ static void on_cmd(struct android_app *app, int32_t cmd) {
         case APP_CMD_GAINED_FOCUS: immersive(); if (g_started) { dm_focus_set(1); dm_audio_suspend(0); } break;
         case APP_CMD_LOST_FOCUS: if (g_started) { dm_focus_set(2); } break;
         case APP_CMD_PAUSE: if (g_started) { dm_focus_set(3); dm_audio_suspend(1); if (nvn_vk_cache_save) nvn_vk_cache_save(); } break;
-        case APP_CMD_RESUME: if (g_started) { dm_focus_set(1); dm_audio_suspend(0); } break;
+        case APP_CMD_RESUME: if (g_started) { dm_focus_set(1); dm_audio_suspend(0); swapin_start(); } break;
     }
 }
 void android_main(struct android_app *app) {

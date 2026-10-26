@@ -42,6 +42,7 @@ for s in local:
 jobs.append((CC + CFLAGS + ["-Dmain=dm_main", "-c", HOST + "/main.c", "-o", OUT + "/objl/main.o"], HOST + "/main.c", OUT + "/objl/main.o"))
 jobs.append((CC + CFLAGS + ["-I" + GLUE, "-c", "app/jni/android_main.c", "-o", OUT + "/objl/android_main.o"], "app/jni/android_main.c", OUT + "/objl/android_main.o"))
 jobs.append((CC + CFLAGS + ["-I" + GFXD + "/nvn", "-c", "app/jni/touch_ui.c", "-o", OUT + "/objl/touch_ui.o"], "app/jni/touch_ui.c", OUT + "/objl/touch_ui.o"))
+jobs.append((CC + CFLAGS + ["-c", "app/jni/touch_menu.c", "-o", OUT + "/objl/touch_menu.o"], "app/jni/touch_menu.c", OUT + "/objl/touch_menu.o"))
 jobs.append((CC + ["-O2", "-fPIC", "-I" + GLUE, "-c", GLUE + "/android_native_app_glue.c", "-o", OUT + "/objl/glue.o"], GLUE + "/android_native_app_glue.c", OUT + "/objl/glue.o"))
 for a in (HOST + "/entry.S", GFXD + "/nvn/nvn_entry.S", GFXD + "/nvn/nvn_thunks.S"):
     e = OUT + "/asm/" + os.path.basename(a); os.makedirs(OUT + "/asm", exist_ok=True)

@@ -51,3 +51,14 @@ shader_oodle	on
 # ---- Shared font ----
 # the game hands the shared font address straight to ScalableFontEngine::LoadFont (no Decode), as SDK 10 and older do: with the BFTTF header every "?" lookup missed and main+0x11f890 crashed on null
 shared_font	ttf
+
+# ---- Touch controls (Android) ----
+# ZL aims, ZR throws: shown beside L and R
+touch_zlzr	on
+# Taps on menu items move the game's cursor there and press A (touch_menu.c): the ui2d pane classes found in main 1.1.1's memory (by their name-keyed objects
+# and fields: name at +0xb0, parent at +0x18), valid for this build only
+touch_menu	on
+touch_menu_build	aee8f150dda1b5a838806e1a5ea6827a
+touch_menu_panes	0x404c2e8 0x404be40 0x404c0a0 0x404bf78 0x404c648 0x404c770
+# On phones: handheld mode (the game's lower render resolution); about 20 fps docked in Jubilife on the Galaxy S25+
+android_op_mode	handheld

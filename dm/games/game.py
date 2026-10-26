@@ -126,6 +126,16 @@ def header(g):
     if om not in ('console', 'handheld'): sys.exit(f'{g.id}: op_mode must be console or handheld: {om}')
     pm = g.get('perf_mode', 'follow')   # the performance mode reported (hle_oe.c): follow = the operation mode's (Boost docked, Normal handheld), boost = Boost always
     if pm not in ('follow', 'boost'): sys.exit(f'{g.id}: perf_mode must be follow or boost: {pm}')
+    tzz = g.get('touch_zlzr', 'off')   # the Android touch controls show ZL and ZR (dm/android/app/jni/touch_ui.c; Legends: Arceus aims with ZL and throws with ZR): on / off
+    if tzz not in ('on', 'off'): sys.exit(f'{g.id}: touch_zlzr must be on or off: {tzz}')
+    tm = g.get('touch_menu', 'off')   # Android: taps on menu items move the game's cursor there and press A (dm/android/app/jni/touch_menu.c): on / off
+    if tm not in ('on', 'off'): sys.exit(f'{g.id}: touch_menu must be on or off: {tm}')
+    tmb = g.get('touch_menu_build', '') if tm == 'on' else ''   # the main build (32 hex digits) the pane class addresses below were found in
+    tmp = g.words('touch_menu_panes', '') if tm == 'on' else []   # the ui2d pane classes' vtable offsets in main (hex)
+    if tm == 'on' and (not re.fullmatch(r'[0-9a-f]{32}', tmb) or not tmp or any(not re.fullmatch(r'0x[0-9a-f]+', v) for v in tmp)):
+        sys.exit(f'{g.id}: touch_menu on needs touch_menu_build (32 hex digits) and touch_menu_panes (0x… offsets)')
+    aom = g.get('android_op_mode', 'follow')   # the operation mode the Android app starts in (android_main.c sets DM_OPMODE unless env.txt does): follow = op_mode, console, handheld (lower resolution: faster on phones)
+    if aom not in ('follow', 'console', 'handheld'): sys.exit(f'{g.id}: android_op_mode must be follow, console or handheld: {aom}')
     api = g.get('device_api', '55.15')   # the NVN API major.minor version nvnDeviceGetInteger reports (hle_nvn.c)
     if not re.fullmatch(r'\d+\.\d+', api): sys.exit(f'{g.id}: device_api must be major.minor: {api}')
     src = f'dm/games/{g.id}' if g.dir.parent == HERE else str(g.dir)
@@ -160,6 +170,11 @@ def header(g):
          f'#define DM_GAME_PAD_FULL {int(pl == "full")}',
          f'#define DM_GAME_OPMODE {int(om == "console")}',
          f'#define DM_GAME_PERF_BOOST {int(pm == "boost")}',
+         f'#define DM_GAME_TOUCH_ZLZR {int(tzz == "on")}',
+         f'#define DM_GAME_ANDROID_OPMODE {({"follow": -1, "console": 1, "handheld": 0})[aom]}',
+         f'#define DM_GAME_TOUCH_MENU {int(tm == "on")}',
+         f'#define DM_GAME_TOUCH_MENU_BUILD {q(tmb)}',
+         f'#define DM_GAME_TOUCH_MENU_PANES {{{", ".join(v + "ull" for v in tmp) or "0"}}}',
          f'#define DM_GAME_FEEDBACK_SNAP {q(" ".join(fbs))}',
          f'#define DM_GAME_ALPHA_FROM_RED {q(" ".join(afr))}',
          f'#define DM_GAME_TEX_FLUSH_UPLOAD {int(tfu == "on")}',

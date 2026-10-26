@@ -489,6 +489,7 @@ typedef struct {
     arena_blk *ar; int nar, car;   // this submission's arena blocks (host-visible): driver segments, converted indices, upload staging
     wb_t *wb; int nwb, cwb;        // mirrored pools: ranges the GPU writes in this submission (copied back to the game's pages at completion)
     VkDescriptorPool *dp; int ndp, cdp;   // g_nopush: this submission's descriptor pools (dp[cdp] in use), reset when it is reused
+    uint64_t frame;                 // the frame it belongs to (GPU time per frame, mtl_gpu_ms)
 } sub_t;
 #define NSUB 6
 static sub_t g_subs[NSUB]; static sub_t *g_sub; static int g_sub_next;
@@ -527,6 +528,17 @@ static void post_apply(sub_t *s) {
     }
     s->npost = 0;
 }
+// GPU time per frame: a timestamp at the start and the end of every submission's main command buffer, summed per frame once it completed (mtl_gpu_ms; the
+// frame report's GPU column and the long-frame lines)
+static VkQueryPool g_tsq; static double g_tsper;
+enum { GRING = 64 };
+static struct { _Atomic uint64_t frame, ns; _Atomic int pending; } g_gpu[GRING];
+static void gpu_ts_done(sub_t *s) {
+    if (!g_tsq) return;
+    uint64_t t[2]; int i = (int)(s - g_subs);
+    if (vkGetQueryPoolResults(g_dev, g_tsq, (uint32_t)i * 2, 2, sizeof t, t, 8, VK_QUERY_RESULT_64_BIT) == VK_SUCCESS && t[1] > t[0]) atomic_fetch_add(&g_gpu[s->frame % GRING].ns, (uint64_t)((t[1] - t[0]) * g_tsper));
+    atomic_fetch_sub(&g_gpu[s->frame % GRING].pending, 1);
+}
 static void *completion_main(void *unused) {
     (void)unused;
     for (;;) {
@@ -538,7 +550,7 @@ static void *completion_main(void *unused) {
         VkResult r = vkWaitSemaphores(g_dev, &wi, 2000000000ull);
         if (r == VK_TIMEOUT) continue;
         if (r) VDIE("vkWaitSemaphores failed: %d (device lost?)", r);
-        post_apply(s);
+        post_apply(s); gpu_ts_done(s);
         pthread_mutex_lock(&g_cmu);
         memmove(g_inflight, g_inflight + 1, (size_t)--g_nin * sizeof *g_inflight);
         atomic_store(&g_done, want);
@@ -557,6 +569,10 @@ static void completion_start(void) {
         VkCommandBufferAllocateInfo cai = { .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, .commandPool = g_subs[i].pool, .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY, .commandBufferCount = 1 };
         VKCHECK(vkAllocateCommandBuffers(g_dev, &cai, &g_subs[i].cb)); VKCHECK(vkAllocateCommandBuffers(g_dev, &cai, &g_subs[i].ucb));
     }
+    {   uint32_t nq = 0; vkGetPhysicalDeviceQueueFamilyProperties(g_pd, &nq, NULL); VkQueueFamilyProperties qp[16]; if (nq > 16) nq = 16; vkGetPhysicalDeviceQueueFamilyProperties(g_pd, &nq, qp);
+        if (g_qf < nq && qp[g_qf].timestampValidBits && g_props.limits.timestampPeriod > 0 && getenv("DM_VK_GPU_TIME") && atoi(getenv("DM_VK_GPU_TIME"))) {   // on request only (DM_VK_GPU_TIME=1): timestamps may cost on tilers
+            VkQueryPoolCreateInfo qi = { .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = 2 * NSUB };
+            if (vkCreateQueryPool(g_dev, &qi, NULL, &g_tsq)) g_tsq = VK_NULL_HANDLE; g_tsper = g_props.limits.timestampPeriod; } }
     pthread_t t; pthread_create(&t, NULL, completion_main, NULL); pthread_detach(t);
 }
 uint64_t mtl_last_fence(void) { return g_fence; }
@@ -616,6 +632,10 @@ void mtl_sub_begin(void) {
     s->npost = 0; s->ucb_open = 0;
     VkCommandBufferBeginInfo bi = { .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT };
     VKCHECK(vkBeginCommandBuffer(s->cb, &bi));
+    if (g_tsq) { int i = (int)(s - g_subs); s->frame = g_frame_no; unsigned k = s->frame % GRING;
+        if (atomic_load(&g_gpu[k].frame) != s->frame) { atomic_store(&g_gpu[k].ns, 0); atomic_store(&g_gpu[k].pending, 0); atomic_store(&g_gpu[k].frame, s->frame); }
+        atomic_fetch_add(&g_gpu[k].pending, 1);
+        vkCmdResetQueryPool(s->cb, g_tsq, (uint32_t)i * 2, 2); vkCmdWriteTimestamp(s->cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, g_tsq, (uint32_t)i * 2); }
     g_sub = s;
     static int inited; if (!inited) { inited = 1; state_reset(); }
 }
@@ -642,6 +662,7 @@ static uint64_t submit_tracked(sub_t *s, VkCommandBuffer *cbs, uint32_t n) {
 uint64_t mtl_sub_commit(void) {
     sub_t *s = g_sub; if (!s) return g_fence;
     pass_end();
+    if (g_tsq) vkCmdWriteTimestamp(s->cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g_tsq, (uint32_t)(s - g_subs) * 2 + 1);
     VKCHECK(vkEndCommandBuffer(s->cb));
     VkCommandBuffer cbs[2]; uint32_t n = 0;
     if (s->ucb_open) { barrier_all(s->ucb); VKCHECK(vkEndCommandBuffer(s->ucb)); cbs[n++] = s->ucb; s->ucb_open = 0; }
@@ -694,6 +715,7 @@ typedef struct vtex {
     vview *views; int nviews; pthread_mutex_t vmu;
     int pkg; uint64_t stamp, seen; const void *span;   // CPU-filled: write-tracking stamp of the uploaded content
     VkBufferView bview;                    // buffer texture (TARGET_BUFFER): a view of its memory pool
+    int fixed_fmt; VkFormat twin;          // 1: not mutable (depth / stencil), 2: mutable within fmt / twin only (tex_make: keeps UBWC)
 } vtex;
 static pthread_mutex_t g_smu = PTHREAD_MUTEX_INITIALIZER;   // serial / sharing / CPU-written tables
 static nvn_hmap g_by_serial = {.klen = 8}, g_ghost = {.klen = 8}, g_tex_live = {.klen = 8}, g_cpu_tex = {.klen = 8};
@@ -774,6 +796,16 @@ static vtex *tex_new(const tex_t *t, int pkg) {
     }
     if ((t->d.flags & NVN_TEXTURE_FLAGS_IMAGE) && (ff & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)) ci.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
     if (fmt_compressed(t->d.format)) ci.flags |= VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT;
+    // Mutable formats switch off Adreno's framebuffer compression (UBWC) unless the formats are listed: depth / stencil images are not mutable at all (their views keep
+    // the format), colour images that can be render targets list their format and its sRGB / linear twin (the reinterpretations NVN views make of render targets)
+    static int nolist = -1; if (nolist < 0) nolist = getenv("DM_VK_NO_FMT_LIST") != NULL;
+    VkFormat twin = x->fmt == VK_FORMAT_R8G8B8A8_UNORM ? VK_FORMAT_R8G8B8A8_SRGB : x->fmt == VK_FORMAT_R8G8B8A8_SRGB ? VK_FORMAT_R8G8B8A8_UNORM :
+                    x->fmt == VK_FORMAT_B8G8R8A8_UNORM ? VK_FORMAT_B8G8R8A8_SRGB : x->fmt == VK_FORMAT_B8G8R8A8_SRGB ? VK_FORMAT_B8G8R8A8_UNORM : x->fmt;
+    VkFormat fl[2] = { x->fmt, twin }; VkImageFormatListCreateInfo fli = { .sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO, .viewFormatCount = twin != x->fmt ? 2 : 1, .pViewFormats = fl };
+    if (!nolist && !x->is3d) {
+        if (fmt_is_depth(x->fmt) || x->fmt == VK_FORMAT_S8_UINT) { ci.flags &= ~VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT; x->fixed_fmt = 1; }
+        else if (ci.usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) { ci.pNext = &fli; x->fixed_fmt = 2; x->twin = twin; }
+    }
     x->w = ci.extent.width; x->h = ci.extent.height; x->d = ci.extent.depth; x->levels = ci.mipLevels; x->layers = ci.arrayLayers; x->samples = ci.samples; x->usage = ci.usage; x->aspect = fmt_aspect(x->fmt);
     VkResult r = vkCreateImage(g_dev, &ci, NULL, &x->img);
     if (r) { RED_ONCE(3, "vkCreateImage %ux%ux%u format %#x (Vulkan %u) target %d failed: %d", x->w, x->h, x->d, t->d.format, vf, t->d.target, r); free(x); return NULL; }
@@ -783,6 +815,7 @@ static vtex *tex_new(const tex_t *t, int pkg) {
     return x;
 }
 static VkImageView view_get(vtex *t, VkImageViewType vt, VkFormat fmt, uint32_t lvl, uint32_t nlvl, uint32_t lay, uint32_t nlay, const uint8_t sw[4], VkImageAspectFlags aspect) {
+    if (t->fixed_fmt && fmt != t->fmt && fmt != t->twin) { RED_ONCE(73, "a view in format %d of an image whose formats are fixed to %d / %d: viewed in its own format (DM_VK_NO_FMT_LIST=1 to compare)", fmt, t->fmt, t->twin); fmt = t->fmt; }
     vview_key k = { (uint32_t)fmt, (uint32_t)vt, lvl, nlvl, lay, nlay, (uint32_t)sw[0] | (uint32_t)sw[1] << 8 | (uint32_t)sw[2] << 16 | (uint32_t)sw[3] << 24, (uint32_t)aspect };
     pthread_mutex_lock(&t->vmu);
     for (int i = 0; i < t->nviews; i++) if (!memcmp(&t->views[i].k, &k, sizeof k)) { VkImageView v = t->views[i].v; pthread_mutex_unlock(&t->vmu); return v; }
@@ -1075,6 +1108,12 @@ static VkImageView tex_view_for(int tid, const spv_res *r, int storage) {
     if (k != 4 && x->is3d) { RED_ONCE(13, "shader declares a 2D-family image, texture ID %d is 3D: reads 0", tid); return VK_NULL_HANDLE; }
     if (k == 5 ? x->samples <= 1 : x->samples > 1) { RED_ONCE(14, "multisample mismatch for texture ID %d (shader ms %d, texture %u samples)", tid, k == 5, x->samples); return VK_NULL_HANDLE; }
     if (k == 0 || k == 5) ns = 1;
+    // a cube view's layer count can be in cubes, not faces: Shield's environment cube is registered as 1 layer of a 6-face texture (read as 0, its water lost the
+    // reflections and turned flat blue)
+    if ((k == 2 || k == 3) && x->cube_ok && ns < 6 && x->layers - s0 >= 6) { uint32_t nc = ns ? ns : 1;
+        static int said[64]; static int nsaid; int seen = 0; for (int q = 0; q < nsaid; q++) if (said[q] == tid) seen = 1;
+        if (!seen && nsaid < 64) { said[nsaid++] = tid; VLOG("cube view of texture ID %d: %ux%u, %u layers from %u, %u levels, Vulkan format %d, %s, usage %#x, serial %llu", tid, x->w, x->h, x->layers, s0, x->levels, x->fmt,
+            x->pkg ? "packaged (from the game's files)" : "made at run time", x->usage, (unsigned long long)rg.t.serial); } ns = nc * 6 <= x->layers - s0 ? nc * 6 : (x->layers - s0) / 6 * 6; }
     if (k == 2 || k == 3) { if (!x->cube_ok || ns < 6) { RED_ONCE(15, "shader declares a cube, texture ID %d has %u layers (cube-compatible %d): reads 0", tid, ns, x->cube_ok); return VK_NULL_HANDLE; } ns = k == 2 ? 6 : ns / 6 * 6; }
     uint8_t sw[4] = { NVN_SWZ_R, NVN_SWZ_G, NVN_SWZ_B, NVN_SWZ_A };
     if (rg.has_v && rg.v.set_swizzle) memcpy(sw, rg.v.swz, 4);
@@ -1357,6 +1396,10 @@ static VkImageView att_view(const tex_t *t, const view_t *v, int has_v, vtex **o
     uint32_t lv = has_v && v->set_levels ? v->base_level : 0, ly = has_v && v->set_layers ? v->min_layer : 0;
     if (x->is3d) { if (ly) RED_ONCE(20, "render target is a slice of a 3D texture: not supported yet"); ly = 0; }
     if (lv >= x->levels || ly >= x->layers) return VK_NULL_HANDLE;
+    if (x->cube_ok) { static uint64_t said[32]; static int nsaid; int seen = 0; uint64_t key = t->serial << 8 | ly << 4 | lv;
+        for (int q = 0; q < nsaid; q++) if (said[q] == key) seen = 1;
+        if (!seen && nsaid < 32) { said[nsaid++] = key; VLOG("render target: cube texture ser %llu level %u layer %u, view layers %u (set %d)", (unsigned long long)t->serial, lv, ly,
+            has_v && v->set_layers ? v->nlayers : 0, has_v && v->set_layers); } }
     VkFormat f = x->fmt;
     if (has_v && v->set_format) { uint32_t vf = 0; uint8_t s[4]; if (nvn_fmt_to_vk(v->format, &vf, s) && vf) f = (VkFormat)vf; }
     *w = x->w >> lv ? x->w >> lv : 1; *h = x->h >> lv ? x->h >> lv : 1;
@@ -1386,6 +1429,7 @@ static void tf_pass_begin(void) {
     VkRenderingInfo ri = { .sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, {1, 1}}, .layerCount = 1 };
     vkCmdBeginRendering(CB(), &ri); P.open = 1; P.tw = P.th = 1; P.samples = 1;
 }
+static uint64_t g_stat_begins;   // vkCmdBeginRendering calls (the present line's statistics)
 static int pass_begin(void) {
     if (P.open) return 1;
     if (!R.has_rt) { RED_ONCE(21, "draw with no render target set"); return 0; }
@@ -1423,11 +1467,12 @@ static int pass_begin(void) {
     barrier_all(CB());
     VkRenderingInfo ri = { .sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, {tw, th}}, .layerCount = 1, .colorAttachmentCount = (uint32_t)ncol, .pColorAttachments = ca,
                            .pDepthAttachment = P.hd ? &da : NULL, .pStencilAttachment = P.hs ? &sa : NULL };
-    vkCmdBeginRendering(CB(), &ri);
+    vkCmdBeginRendering(CB(), &ri); g_stat_begins++;
     memset(R.clear_c, 0, sizeof R.clear_c); R.clear_d = R.clear_s = 0;
     P.open = 1;
     return 1;
 }
+static int getenv_nomerge(void) { static int v = -1; if (v < 0) v = getenv("DM_VK_NO_PASS_MERGE") != NULL; return v; }   // A/B switch
 static void pass_flush(void) {   // pending clears with no draw after them: a pass just for them
     int pend = R.clear_d || R.clear_s; for (int i = 0; i < 8; i++) pend |= R.clear_c[i];
     if (pend && !P.open && g_sub) pass_begin();
@@ -2077,7 +2122,14 @@ static int state_op(uint32_t op, const void *a) {
     }
     return 1;
 }
-static uint64_t g_stat_draws, g_stat_passes;
+static uint64_t g_stat_draws, g_stat_passes, g_stat_rt_same;
+// The same render targets set again while their pass is open: the pass goes on (on a tiler every pass end stores the attachments and every begin loads them back;
+// Legends: Arceus sets render targets about 120 times a frame). Views compared field by field where set
+static int rt_same(const p_set_rt *a, const p_set_rt *b) {
+    if (a->n != b->n || a->depth != b->depth || a->has_dview != b->has_dview || (a->has_dview && memcmp(&a->dview, &b->dview, sizeof a->dview))) return 0;
+    for (int i = 0; i < a->n && i < 8; i++) if (a->color[i] != b->color[i] || a->has_cview[i] != b->has_cview[i] || (a->has_cview[i] && memcmp(&a->cview[i], &b->cview[i], sizeof a->cview[i]))) return 0;
+    return 1;
+}
 void mtl_exec_rest(const uint64_t *h, int n) { (void)h; (void)n; }
 void mtl_sub_index(const uint64_t *h, int n) { (void)h; (void)n; }
 void mtl_exec(const uint8_t *p) {
@@ -2096,7 +2148,8 @@ void mtl_exec(const uint8_t *p) {
             case OP_CLEAR_BUF: { const p_clear_buf *cb = (const p_clear_buf *)a; mtl_sub_fill(cb->addr, cb->size, cb->value); break; }
             case OP_COPY_B2B: { uint64_t s, d, n; memcpy(&s, a, 8); memcpy(&d, a + 8, 8); memcpy(&n, a + 16, 8); sub_copy(s, d, n); break; }
             case OP_UPDATE_UB: { uint64_t d, n; memcpy(&d, a, 8); memcpy(&n, a + 8, 8); sub_update(a + 16, d, n); break; }
-            case OP_SET_RT: pass_flush(); R.rt = *(const p_set_rt *)a; R.has_rt = 1; g_stat_passes++; break;
+            case OP_SET_RT: g_stat_passes++; if (P.open && R.has_rt && !getenv_nomerge() && rt_same(&R.rt, (const p_set_rt *)a)) { g_stat_rt_same++; break; }
+                pass_flush(); R.rt = *(const p_set_rt *)a; R.has_rt = 1; break;
             case OP_CLEAR_COLOR: {
                 const p_clear_color *c = (const p_clear_color *)a;
                 if (c->index < 0 || c->index >= R.rt.n || !R.rt.color[c->index]) { RED_ONCE(53, "colour clear target %d invalid", c->index); break; }
@@ -2494,7 +2547,7 @@ uint64_t mtl_present(const tex_t *t, double period_s, const int crop[4]) {
     if (n % 900 == 0 && atomic_load(&g_pso_new) >= 10) { static atomic_int busy; if (!atomic_exchange(&busy, 1)) {   // new pipelines: the cache file is rewritten in the background
         pthread_t t; void *saver(void *a); if (pthread_create(&t, NULL, saver, &busy)) atomic_store(&busy, 0); else pthread_detach(t); } }
     if (n % 1800 == 0) { VLOG("pipelines built during play so far: %d", atomic_load(&g_pso_ingame)); mem_report(); }
-    if (n == 1 || n % 300 == 0) VLOG("present %llu: %llu passes, %llu draws so far; textures uploaded %llu (re-uploaded %llu, %.1f MB)", (unsigned long long)n, (unsigned long long)g_stat_passes,
+    if (n == 1 || n % 300 == 0) VLOG("present %llu: %llu render target sets (%llu kept the open pass, %llu passes begun), %llu draws so far; textures uploaded %llu (re-uploaded %llu, %.1f MB)", (unsigned long long)n, (unsigned long long)g_stat_passes, (unsigned long long)g_stat_rt_same, (unsigned long long)g_stat_begins,
                                      (unsigned long long)g_stat_draws, (unsigned long long)g_pkg_uploads, (unsigned long long)g_pkg_reuploads, g_up_bytes / 1048576.0);
     return n;
 }
@@ -2509,7 +2562,7 @@ int mtl_link_active(void) { return 0; }
 int mtl_link_wait_tick(int vsyncs, uint64_t timeout_ns) { (void)vsyncs; (void)timeout_ns; return 0; }
 void mtl_xv_window_tex(uint64_t serial) { (void)serial; }
 void mtl_set_frame(uint64_t f) { g_frame_no = f; }
-double mtl_gpu_ms(uint64_t f) { (void)f; return -1; }
+double mtl_gpu_ms(uint64_t f) { unsigned k = f % GRING; if (!g_tsq || atomic_load(&g_gpu[k].frame) != f || atomic_load(&g_gpu[k].pending) > 0) return -1; return atomic_load(&g_gpu[k].ns) / 1e6; }
 int mtl_gpu_span(uint64_t f, uint64_t *t0, uint64_t *t1) { (void)f; *t0 = *t1 = 0; return 0; }
 void mtl_ub_present(double iv_ms) { (void)iv_ms; }
 // statistics read by the host's report lines
