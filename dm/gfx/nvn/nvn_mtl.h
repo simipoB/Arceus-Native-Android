@@ -6,6 +6,9 @@
 #include <stddef.h>
 
 void mtl_init(void);
+void mtl_submit(const uint64_t *h, int n);
+uint64_t mtl_present_fence(uint64_t ticket);   // a window texture's acquire fence: the work queued before its last present   // nvnQueueSubmitCommands: replayed now, or queued to the render thread (nvn_vk.c)
+void mtl_shader_seen(const uint8_t key[8], const void *control, const void *code, uint32_t ncode);   // a shader handed over: saved for translation when the pack lacks it (DM_NVN_CAPTURE)
 void mtl_set_depth_zero(int on);          // NVN depth mode: 1 = near is 0 (D3D / Metal), 0 = near is -w (GL, NVN's default); picks the vertex shaders' entry point (see shader_load in nvn_mtl.m)
 void mtl_set_origin_lower_left(int on);   // NVN window origin: 1 = lower left (GL, NVN's default), 0 = upper left (D3D / Metal); see nvn_mtl.m
 void bf_want_note(const char *key);

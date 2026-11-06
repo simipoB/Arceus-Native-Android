@@ -527,7 +527,9 @@ NVN(nvnProgramSetShaders, NVNboolean, NVNprogram *p, int n, const NVNshaderData 
     prog_keys_t *k = pk_get(p, 1);
     k->ok = 0;
     for (int i = 0; i < n; i++) {
-        if (keys_hash(&sd[i], 1, k->key[i])) k->ok |= (uint8_t)(1u << i);
+        if (keys_hash(&sd[i], 1, k->key[i])) { k->ok |= (uint8_t)(1u << i);
+            uint32_t ncode; memcpy(&ncode, (const uint8_t *)sd[i].control + 0x704, 4);   // the code area's size in the control section (as Shield)
+            mtl_shader_seen(k->key[i], sd[i].control, (const void *)(uintptr_t)sd[i].data, ncode); }
         // DM_NVN_SHDUMP (debugging): keep a copy of the control section so the replay layer can save shaders missing from the map (never freed)
         if (dump && sd[i].control) { void *c = malloc(0x880); memcpy(c, sd[i].control, 0x880); o->sd[i].control = c; }
     }
@@ -809,6 +811,13 @@ NVN(nvnCommandBufferSetViewports, void, NVNcommandBuffer *c, int first, int n, c
 NVN(nvnCommandBufferSetScissor, void, NVNcommandBuffer *c, int x, int y, int w, int h) { *REC(c, OP_SCISSOR, p_scissor) = (p_scissor){x, y, w, h}; }
 NVN(nvnCommandBufferSetDepthRange, void, NVNcommandBuffer *c, float n, float f) { *REC(c, OP_DEPTH_RANGE, p_depth_range) = (p_depth_range){n, f}; }
 NVN(nvnCommandBufferBindProgram, void, NVNcommandBuffer *c, const NVNprogram *p, int stages) {
+    { static const char *tr = (const char *)1; if (tr == (const char *)1) tr = getenv("DM_VK_TRACE_FS");   // debugging: the programs DM_VK_TRACE_FS names, as the game records them
+      if (tr && p) for (unsigned st = 0; st < ((const prog_t *)p)->nstage; st++) { uint8_t k[8]; char hex[17]; if (!prog_key((const prog_t *)p, st, k)) continue;
+          for (int q = 0; q < 8; q++) sprintf(hex + 2 * q, "%02x", k[q]);
+          if (strstr(tr, hex)) { static int n_; if (n_++ < 40) { char all[160] = ""; size_t o = 0;
+                  for (unsigned s2 = 0; s2 < ((const prog_t *)p)->nstage && o + 20 < sizeof all; s2++) { uint8_t k2[8]; if (!prog_key((const prog_t *)p, s2, k2)) continue;
+                      for (int q = 0; q < 8; q++) o += (size_t)sprintf(all + o, "%02x", k2[q]); all[o++] = ' '; all[o] = 0; }
+                  LOG("[trace] recorded: BindProgram %s (stages %#x; all stages: %s) into command buffer %p, recording %d", hex, stages, all, (void *)c, CB(c)->recording); } break; } } }
     *REC(c, OP_BIND_PROGRAM, p_bind_program) = (p_bind_program){(const prog_t *)p, stages};
 }
 static void bind_state(NVNcommandBuffer *c, int kind, const void *st, size_t n) { p_bind_state *r = REC(c, OP_BIND_STATE, p_bind_state); r->kind = kind; memcpy(r->bytes, st, n); }
@@ -1029,17 +1038,19 @@ void dm_gfx_suspend(int on) {
 // submits on both from two threads; the second submission arrived while the first was replaying and the host stopped with "submit re-entered" at the ninth frame. NVN orders work on different queues only
 // through syncs, so replaying the two queues' submissions in lock order is one valid order
 static pthread_mutex_t g_sub_mu = PTHREAD_MUTEX_INITIALIZER;
+__attribute__((weak)) uint64_t mtl_present_fence(uint64_t ticket) { (void)ticket; return mtl_last_fence(); }   // nvn_vk.c: the fence as of that present
+__attribute__((weak)) void mtl_submit(const uint64_t *h, int n) {   // the replay on this thread (the Metal host); nvn_vk.c may queue it to a render thread
+    mtl_sub_begin(); mtl_sub_index(h, n);
+    for (int i = 0; i < n; i++) { mtl_exec_rest(h + i + 1, n - i - 1); mtl_exec((const uint8_t *)(uintptr_t)h[i]); }
+    mtl_exec_rest(NULL, 0); mtl_sub_commit();
+}
 NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h) {
     gfx_enter();
     pthread_mutex_lock(&g_sub_mu);
     uint64_t t0 = now_ns(), c0 = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID), i0, y0, s0 = thr_sys_ns(); thr_counts(&i0, &y0);
     ((queue_t *)q)->submits++;
-    mtl_sub_begin();
     nvn_ft_poll();
-    mtl_sub_index((const uint64_t *)h, n);
-    for (int i = 0; i < n; i++) { mtl_exec_rest((const uint64_t *)h + i + 1, n - i - 1); mtl_exec((const uint8_t *)h[i]); }
-    mtl_exec_rest(NULL, 0);
-    mtl_sub_commit();
+    mtl_submit((const uint64_t *)h, n);   // replayed here, or queued to the render thread (nvn_vk.c)
     pthread_mutex_unlock(&g_sub_mu);
     uint64_t dw = now_ns() - t0;
     atomic_fetch_add(&g_nvn_ns, dw); atomic_fetch_add(&g_sub_wall_ns, dw);
@@ -1163,7 +1174,7 @@ NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsyn
     // The previous present of this texture has not yet been processed by the present thread (display cannot keep up, a whole swapchain round behind): wait for it to be returned, then hand it to the game to draw
     uint64_t tk = *idx < 4 ? o->ticket[*idx] : 0;
     if (tk) { uint64_t w0 = now_ns(); mtl_present_wait(tk); g_pq_wait_ns += now_ns() - w0; }
-    if (s) { ((sync_t *)s)->fenced = 1; ((sync_t *)s)->fence = mtl_last_fence(); }   // The swapchain texture becomes available once the commits before this point have completed
+    if (s) { ((sync_t *)s)->fenced = 1; ((sync_t *)s)->fence = mtl_present_fence(tk); }   // The swapchain texture becomes available once the work before its last present has completed
     if (!g_fs_start) { g_fs_start = now_ns(); g_fs_wait = pace_ns; }   // the frame starts when the first acquire after a present returns: on a display-link tick when on time
     return NVN_WINDOW_ACQUIRE_TEXTURE_RESULT_SUCCESS;
 }

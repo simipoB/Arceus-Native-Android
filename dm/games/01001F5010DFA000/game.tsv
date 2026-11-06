@@ -60,5 +60,10 @@ touch_zlzr	on
 touch_menu	on
 touch_menu_build	aee8f150dda1b5a838806e1a5ea6827a
 touch_menu_panes	0x404c2e8 0x404be40 0x404c0a0 0x404bf78 0x404c648 0x404c770
+# The list selection class (count +0x8, selected index +0x14, columns +0x20, rows shown +0x24; found by the index following the D-pad): a tap writes the
+# tapped item's index next to it and one D-pad press moves there, in place of walking the cursor (the Satchel's items, its party)
+touch_menu_lists	0x416ee48
+# The pop-up choice class (selected choice +0x8, choices +0x10: the Satchel's Use / Favorite / Discard / Cancel): a tap on a choice selects it the same way
+touch_menu_popups	0x416ece8
 # On phones: handheld mode (the game's lower render resolution); about 20 fps docked in Jubilife on the Galaxy S25+
 android_op_mode	handheld

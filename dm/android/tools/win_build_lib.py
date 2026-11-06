@@ -25,14 +25,16 @@ def newer(src, dst):
 
 os.makedirs(OUT + "/gen", exist_ok=True)
 gh = OUT + "/gen/game_profile.h"
-if not os.path.exists(gh):
+# regenerated when the profile or its generator is newer (as Makefile.host's rule)
+srcs = ["../games/game.py"] + glob.glob("../games/" + GAME + "/game.tsv")
+if not os.path.exists(gh) or any(os.path.getmtime(p) > os.path.getmtime(gh) for p in srcs):
     run([sys.executable, "../games/game.py", "header", GAME, gh])
 
 g = lambda p: sorted(glob.glob(p))
 src = [s for s in g(HOST + "/*.c") if os.path.basename(s) not in ("hle_movie_avc.c", "main.c")]
 src += [s for s in g(GFXD + "/*.c") + g(GFXD + "/nvn/*.c") + g(GFXD + "/tex/*.c")]
 src = [s.replace("\\", "/") for s in src]
-local = ["compat/compat.c", "compat/apkfs.c", "compat/aaudio_unit.c", "host/movie_avc_null.c"]
+local = ["compat/compat.c", "compat/apkfs.c", "compat/aaudio_unit.c", "compat/crypto_emu.c", "host/movie_avc_null.c"]
 
 jobs = []  # (cmd, src, obj)
 for s in src:

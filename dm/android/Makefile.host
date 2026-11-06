@@ -17,7 +17,7 @@ CFLAGS = -O2 -g -fPIC -Wall -Wno-unused-function -Wno-unused-variable -Wno-unuse
          -I$(HOST) -I$(GFXD)/nvn -I$(GFXD)/nvn/include -I../third_party/vulkan-headers/include -I$(OUT)/gen -I$(GAME_DIR) -I../third_party/libvpx -I../third_party/stb_vorbis
 # Darwin-only files: the Mac front end, the Metal / Vulkan-on-Metal backends, VideoToolbox, the memory sampler (memstat.m)
 SRC = $(filter-out $(HOST)/hle_movie_avc.c $(GFXD)/nvn/nvn_vk.c,$(wildcard $(HOST)/*.c)) $(filter-out $(GFXD)/nvn/nvn_vk.c,$(wildcard $(GFXD)/*.c $(GFXD)/nvn/*.c $(GFXD)/tex/*.c)) $(if $(filter vulkan,$(GFX)),$(GFXD)/nvn/nvn_vk.c)
-LOCAL = compat/compat.c compat/apkfs.c compat/aaudio_unit.c host/movie_avc_null.c host/front_null.c $(if $(filter null,$(GFX)),host/null_gfx.c)
+LOCAL = compat/compat.c compat/apkfs.c compat/aaudio_unit.c compat/crypto_emu.c host/movie_avc_null.c host/front_null.c $(if $(filter null,$(GFX)),host/null_gfx.c)
 ASM = $(HOST)/entry.S $(GFXD)/nvn/nvn_entry.S $(GFXD)/nvn/nvn_thunks.S
 ASM_ELF = $(patsubst %.S,$(OUT)/asm/%.S,$(notdir $(ASM)))
 OBJ = $(patsubst ../%.c,$(OUT)/obj/%.o,$(SRC)) $(patsubst %.c,$(OUT)/obj/android/%.o,$(LOCAL)) $(ASM_ELF:.S=.o)

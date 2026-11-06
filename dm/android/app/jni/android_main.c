@@ -13,6 +13,9 @@
 #include <android/input.h>
 #include <android_native_app_glue.h>
 #include <pthread.h>
+#include <sys/prctl.h>
+#include <sched.h>
+#include <errno.h>
 #include <jni.h>
 #include <sys/resource.h>
 #include <dlfcn.h>
@@ -28,6 +31,9 @@
 #include <time.h>
 #include <unistd.h>
 #include <math.h>
+#include <ctype.h>
+#include <strings.h>
+#include <sys/system_properties.h>
 #include "dm_input.h"
 #include "front.h"
 #include "game_profile.h"
@@ -112,6 +118,12 @@ static uint64_t key_bit(int32_t kc) {
         case AKEYCODE_BUTTON_L1: return DM_BTN_L; case AKEYCODE_BUTTON_R1: return DM_BTN_R; case AKEYCODE_BUTTON_L2: return DM_BTN_ZL; case AKEYCODE_BUTTON_R2: return DM_BTN_ZR;
         case AKEYCODE_BUTTON_THUMBL: return DM_BTN_LS; case AKEYCODE_BUTTON_THUMBR: return DM_BTN_RS; case AKEYCODE_BUTTON_START: return DM_BTN_PLUS; case AKEYCODE_BUTTON_SELECT: return DM_BTN_MINUS;
         case AKEYCODE_DPAD_UP: return DM_BTN_UP; case AKEYCODE_DPAD_DOWN: return DM_BTN_DOWN; case AKEYCODE_DPAD_LEFT: return DM_BTN_LEFT; case AKEYCODE_DPAD_RIGHT: return DM_BTN_RIGHT;
+        // a keyboard (a phone's Bluetooth keyboard, the Android Emulator's PC keyboard): Enter / Space = A, Esc / Backspace = B, X / Y / Q / E / Z / C / Tab / M as named,
+        // arrows = D-pad (they arrive as DPAD keys above); WASD = the left stick (key_stick below)
+        case AKEYCODE_ENTER: case AKEYCODE_NUMPAD_ENTER: case AKEYCODE_SPACE: case AKEYCODE_DPAD_CENTER: return DM_BTN_A;
+        case AKEYCODE_ESCAPE: case AKEYCODE_DEL: return DM_BTN_B;
+        case AKEYCODE_X: return DM_BTN_X; case AKEYCODE_Y: return DM_BTN_Y; case AKEYCODE_Q: return DM_BTN_L; case AKEYCODE_E: return DM_BTN_R;
+        case AKEYCODE_Z: return DM_BTN_ZL; case AKEYCODE_C: return DM_BTN_ZR; case AKEYCODE_TAB: return DM_BTN_PLUS; case AKEYCODE_M: return DM_BTN_MINUS;
     }
     return 0;
 }
@@ -131,6 +143,13 @@ static int32_t on_input(struct android_app *app, AInputEvent *e) {
     if (type == AINPUT_EVENT_TYPE_KEY) {
         int32_t kc = AKeyEvent_getKeyCode(e); uint64_t b = key_bit(kc);
         if (kc == AKEYCODE_BACK && !b) { uint64_t m = AKeyEvent_getAction(e) == AKEY_EVENT_ACTION_DOWN ? DM_BTN_B : 0; dm_input_set(g_touch_btn | m, g_touch_s[0], g_touch_s[1], g_touch_s[2], g_touch_s[3]); return 1; }   // the system back = B (the game never closes on back)
+        static uint8_t wasd; int wb = kc == AKEYCODE_W ? 1 : kc == AKEYCODE_S ? 2 : kc == AKEYCODE_A ? 4 : kc == AKEYCODE_D ? 8 : 0;
+        if (wb) {   // WASD: the left stick, full tilt
+            if (AKeyEvent_getAction(e) == AKEY_EVENT_ACTION_DOWN) wasd |= wb; else if (AKeyEvent_getAction(e) == AKEY_EVENT_ACTION_UP) wasd &= ~wb;
+            int k = pad_slot(AInputEvent_getDeviceId(e));
+            g_pads[k].lx = (wasd & 8 ? DM_STICK_MAX : 0) - (wasd & 4 ? DM_STICK_MAX : 0); g_pads[k].ly = (wasd & 1 ? DM_STICK_MAX : 0) - (wasd & 2 ? DM_STICK_MAX : 0);
+            pads_merge(); return 1;
+        }
         if (!b) return 0;
         int k = pad_slot(AInputEvent_getDeviceId(e));
         if (AKeyEvent_getAction(e) == AKEY_EVENT_ACTION_DOWN) g_pads[k].btn |= b; else if (AKeyEvent_getAction(e) == AKEY_EVENT_ACTION_UP) g_pads[k].btn &= ~b;
@@ -149,17 +168,90 @@ static int32_t on_input(struct android_app *app, AInputEvent *e) {
         g_pads[k].hat = (hx < -0.5f ? DM_BTN_LEFT : 0) | (hx > 0.5f ? DM_BTN_RIGHT : 0) | (hy < -0.5f ? DM_BTN_UP : 0) | (hy > 0.5f ? DM_BTN_DOWN : 0) | (lt > 0.5f ? DM_BTN_ZL : 0) | (rt > 0.5f ? DM_BTN_ZR : 0);
         pads_merge(); return 1;
     }
-    if (type == AINPUT_EVENT_TYPE_MOTION && (src & AINPUT_SOURCE_TOUCHSCREEN)) { touch_update(e); return 1; }
+    // touch, and a mouse as touch (the Android Emulator's window, a mouse on a phone): its button press / release arrive as DOWN / UP; hover moves are ignored
+    if (type == AINPUT_EVENT_TYPE_MOTION && ((src & AINPUT_SOURCE_TOUCHSCREEN) == AINPUT_SOURCE_TOUCHSCREEN || (src & AINPUT_SOURCE_MOUSE) == AINPUT_SOURCE_MOUSE)) {
+        int32_t act = AMotionEvent_getAction(e) & AMOTION_EVENT_ACTION_MASK;
+        if (act == AMOTION_EVENT_ACTION_HOVER_MOVE || act == AMOTION_EVENT_ACTION_HOVER_ENTER || act == AMOTION_EVENT_ACTION_HOVER_EXIT || act == AMOTION_EVENT_ACTION_SCROLL ||
+            act == AMOTION_EVENT_ACTION_BUTTON_PRESS || act == AMOTION_EVENT_ACTION_BUTTON_RELEASE) return 1;
+        static int said; if (!said++) fprintf(stderr, "[dm] input: first pointer event (source %#x, action %d)\n", src, act);
+        touch_update(e); return 1; }
     return 0;
 }
 
 // ---------- Host start ----------
 static int g_started;
+// Device profiles: defaults by chip, from its model (ro.soc.manufacturer / ro.soc.model, Android 12+: SM8750, MT6989, s5e9945 ...), as PKShield's. Set without overwriting,
+// after env.txt, so the player's own settings always win; DM_PROFILE=<name> picks one by hand, DM_PROFILE=none none. The game already runs in handheld mode (720p) here,
+// so a profile sets what is left: anisotropic filtering and texture size (DM_VK_TEX_QUALITY=half: the game's large textures without their largest mip level, nvn_vk.c).
+// GPUs without BC textures (Mali, Xclipse, PowerVR) decode the game's textures on upload to 4 to 8 times their size, so their profiles keep textures at half size sooner.
+// Starting points from the chips' standing, not yet from measurements on each:
+//   sd8     Snapdragon 8 Gen 1 and later, 8s, 8 Elite (SM8450 and up)       nothing changed: the defaults these phones were tuned on (8x filtering, full textures)
+//   sd8old  Snapdragon 865 / 870 / 888 (SM8250-SM8350, Adreno 650 / 660)     4x filtering; full textures
+//   sd7     Snapdragon 7 series from 2021 (SM73xx and later)                  4x filtering; full textures
+//   sd6     Snapdragon 6 and 4 series, 7 series before 2021, 855 and older    2x filtering; half textures
+//   high    Dimensity 9000 series, Exynos 2000 series (Xclipse 9xx)           4x filtering; full textures
+//   mid     Dimensity 8000 series and 1000-1200, Google Tensor                4x filtering; half textures
+//   low     other MediaTek (Dimensity 7000 / 6000, Helio), Exynos 1000 series and older   2x filtering; half textures
+// Other chips get no profile
+static const struct prof { const char *name, *what, *aniso, *tex; } g_profiles[] = {
+    { "sd8", "Snapdragon 8 series", NULL, NULL }, { "sd8old", "Snapdragon 865 / 870 / 888", "4", "full" }, { "sd7", "Snapdragon 7 series", "4", "full" },
+    { "sd6", "Snapdragon 6 / 4 series or older 7 / 8 series", "2", "half" }, { "high", "Dimensity 9000 / Exynos 2000 series", "4", "full" },
+    { "mid", "Dimensity 8000 series / Google Tensor", "4", "half" }, { "low", "MediaTek Dimensity 7000 and below / Exynos 1000 series", "2", "half" },
+};
+static const struct prof *profile_of(const char *maker, const char *model) {
+    char m[PROP_VALUE_MAX]; size_t k = 0; for (; model[k] && k + 1 < sizeof m; k++) m[k] = (char)tolower((unsigned char)model[k]); m[k] = 0;
+    const char *name = NULL; int num;
+    if ((!strncmp(m, "sm", 2) && isdigit((unsigned char)m[2])) || (!strncmp(m, "sdm", 3) && isdigit((unsigned char)m[3]))) {   // Qualcomm
+        num = atoi(m + (m[1] == 'd' ? 3 : 2));
+        name = num >= 8450 && num < 9000 ? "sd8" : num >= 8250 && num < 8450 ? "sd8old" : num >= 7300 && num < 8000 ? "sd7" : num >= 4000 && num < 8250 ? "sd6" : num > 0 && num < 1000 ? "sd6" : NULL;   // (SDM845 and the like: before the SMxxxx names)
+    } else if (!strncmp(m, "mt", 2) && isdigit((unsigned char)m[2])) {   // MediaTek: MT6983 / 6985 / 6989 / 6991 / 6993 Dimensity 9000-9500; MT6889-6899 Dimensity 1000-1200 and 8000-8400
+        num = atoi(m + 2); name = num == 6983 || num == 6985 || num == 6989 || num == 6991 || num == 6993 ? "high" : num >= 6889 && num <= 6899 ? "mid" : "low";
+    } else if (!strncmp(m, "s5e", 3) || strstr(m, "exynos")) {   // Exynos: s5e99xx and "Exynos 2xxx" are the 2000 series; s5e88xx, Exynos 1xxx and 9xx the rest
+        const char *d = m; while (*d && !isdigit((unsigned char)*d)) d++; if (!strncmp(m, "s5e", 3)) d = m + 3;
+        num = atoi(d); name = (!strncmp(m, "s5e", 3) && num >= 9900 && num < 10000) || (strncmp(m, "s5e", 3) && num >= 2000 && num < 3000) ? "high" : "low";
+    } else if (strstr(m, "tensor") || (!strncasecmp(maker, "google", 6) && *m)) name = "mid";
+    for (unsigned i = 0; name && i < sizeof g_profiles / sizeof *g_profiles; i++) if (!strcmp(g_profiles[i].name, name)) return &g_profiles[i];
+    return NULL;
+}
+static void device_profile(void) {
+    char maker[PROP_VALUE_MAX] = "", model[PROP_VALUE_MAX] = ""; __system_property_get("ro.soc.manufacturer", maker); __system_property_get("ro.soc.model", model);
+    const char *force = getenv("DM_PROFILE"); const struct prof *p = NULL;
+    if (force) { for (unsigned i = 0; i < sizeof g_profiles / sizeof *g_profiles; i++) if (!strcmp(g_profiles[i].name, force)) p = &g_profiles[i]; }
+    else p = profile_of(maker, model);
+    if (!p) { fprintf(stderr, "boot: device profile none (chip %s %s)\n", *maker ? maker : "?", *model ? model : "unknown"); return; }
+    if (!p->aniso) { fprintf(stderr, "boot: device profile %s, %s (chip %s %s): the defaults, nothing changed\n", p->name, p->what, *maker ? maker : "?", *model ? model : "unknown"); return; }
+    setenv("DM_VK_MAX_ANISO", p->aniso, 0); setenv("DM_VK_TEX_QUALITY", p->tex, 0);
+    fprintf(stderr, "boot: device profile %s, %s (chip %s %s%s): anisotropic filtering %sx, textures %s\n", p->name, p->what, *maker ? maker : "?", *model ? model : "unknown",
+            force ? ", DM_PROFILE" : "", getenv("DM_VK_MAX_ANISO"), getenv("DM_VK_TEX_QUALITY"));
+}
 static void env_file(const char *path) {   // KEY=VALUE lines, # comments; set only when not already set
     FILE *f = fopen(path, "r"); char ln[512]; if (!f) return;
     while (fgets(ln, sizeof ln, f)) { char *p = ln; while (*p == ' ' || *p == '\t') p++; if (*p == '#' || !*p) continue; char *eq = strchr(p, '='); if (!eq || eq == p) continue;
         *eq = 0; char *v = eq + 1; char *e = strpbrk(v, "\r\n"); if (e) *e = 0; if (!getenv(p)) { setenv(p, v, 0); fprintf(stderr, "boot: env %s=%s\n", p, v); } }
     fclose(f);
+}
+// "Lower specs" (the settings' DM_LOWSPEC: 1 lower, 2 lowest), for phones that cannot hold the game's frame rate: the POTATO mod's RomFS files, kept in this library
+//   (lowspec_files.h) and written to <files>/lowspec on start, are laid over the game's RomFS (hle_fs.c DM_ROMFS_OVERLAY, first root wins): a shorter draw distance for
+//   Pokémon, people and trees (bin/misc/app_config/field_common_config.bin) and lighter shadows, at 1 fewer (Low Shadows), at 2 none (No Shadows: field_shadow_config.bin)
+#include "lowspec_files.h"
+static int write_all(const char *path, const unsigned char *b, size_t n) {
+    char d[1200]; snprintf(d, sizeof d, "%s", path);
+    for (char *s = d + 1; *s; s++) if (*s == '/') { *s = 0; mkdir(d, 0770); *s = '/'; }
+    FILE *f = fopen(path, "wb"); if (!f) return 0;
+    int ok = fwrite(b, 1, n, f) == n; return fclose(f) == 0 && ok;
+}
+static void lowspec(void) {
+    const char *e = getenv("DM_LOWSPEC"); int lv = e ? atoi(e) : 0; if (lv < 1 || lv > 2) return;
+    char root[1100], f[1300]; snprintf(root, sizeof root, "%s/lowspec/romfs", g_files);
+    snprintf(f, sizeof f, "%s/bin/misc/app_config/field_common_config.bin", root);
+    int ok = write_all(f, LS_draw_distance, sizeof LS_draw_distance);
+    snprintf(f, sizeof f, "%s/bin/misc/app_config/field_shadow_config.bin", root);
+    ok &= lv == 2 ? write_all(f, LS_no_shadows, sizeof LS_no_shadows) : write_all(f, LS_low_shadows, sizeof LS_low_shadows);
+    if (!ok) { fprintf(stderr, "boot: [RED] lower specs: could not write %s\n", root); return; }
+    const char *o = getenv("DM_ROMFS_OVERLAY"); char all[4096];
+    snprintf(all, sizeof all, "%s%s%s", root, o && *o ? ":" : "", o && *o ? o : "");   // (ahead of any other overlay)
+    setenv("DM_ROMFS_OVERLAY", all, 1);
+    fprintf(stderr, "boot: lower specs %d: shorter draw distance, %s (RomFS overlay %s)\n", lv, lv == 2 ? "no shadows" : "lighter shadows", root);
 }
 static pid_t g_game_tid;   // the game's main thread (performance hints below)
 static void *host_thread(void *a) {
@@ -248,14 +340,42 @@ static void inspector_tree(FILE *req, FILE *out) {
     char ln[128]; while (fgets(ln, sizeof ln, req)) { unsigned long a, per; if (sscanf(ln, "%lx %lx", &a, &per) != 2) continue; if (per > 0x1000) per = 0x1000;
         int count = 0; fprintf(out, "# tree %lx\n", a); tree_walk(out, a, per, 0, &count); fprintf(out, "# %d nodes\n", count); }
 }
+// poke.req: lines "<hex address> <hex bytes>" written into the process (debugging: flip a byte in a live game object); bad addresses fail, not crash → poke.out
+static void inspector_poke(FILE *req, FILE *out) {
+    char ln[1200]; while (fgets(ln, sizeof ln, req)) { unsigned long a; char hex[1024]; if (sscanf(ln, "%lx %1023s", &a, hex) != 2) continue;
+        uint8_t b[512]; size_t n = 0; for (const char *h = hex; h[0] && h[1] && n < sizeof b; h += 2) { unsigned v; if (sscanf(h, "%2x", &v) != 1) break; b[n++] = (uint8_t)v; }
+        struct iovec l = { b, n }, r = { (void *)a, n }; ssize_t w = process_vm_writev(getpid(), &l, 1, &r, 1, 0);
+        fprintf(out, "%lx %zu bytes: %s\n", a, n, w == (ssize_t)n ? "written" : "failed"); }
+}
 static void *inspector_main(void *p) {
     (void)p; char q[1200], o[1200], t[1200];
     for (;;) { sleep(1);
-        static const char *kind[3] = { "scan", "peek", "tree" };
-        for (int k = 0; k < 3; k++) { snprintf(q, sizeof q, "%s/%s.req", g_files, kind[k]); FILE *r = fopen(q, "r"); if (!r) continue;
+        static const char *kind[4] = { "scan", "peek", "tree", "poke" };
+        for (int k = 0; k < 4; k++) { snprintf(q, sizeof q, "%s/%s.req", g_files, kind[k]); FILE *r = fopen(q, "r"); if (!r) continue;
             snprintf(t, sizeof t, "%s/%s.tmp", g_files, kind[k]); snprintf(o, sizeof o, "%s/%s.out", g_files, kind[k]); FILE *w = fopen(t, "w");
-            if (w) { if (k == 2) inspector_tree(r, w); else if (k) inspector_peek(r, w); else inspector_scan(r, w); fclose(w); rename(t, o); } fclose(r); unlink(q); } }
+            if (w) { if (k == 3) inspector_poke(r, w); else if (k == 2) inspector_tree(r, w); else if (k) inspector_peek(r, w); else inspector_scan(r, w); fclose(w); rename(t, o); } fclose(r); unlink(q); } }
     return NULL;
+}
+// A custom Vulkan driver (a Qualcomm driver package for Adreno 8xx, Mesa Turnip): its files (meta.json and the library, as the package's zip holds them) put in
+// <files>/driver/ are copied into the app's private storage, where libadrenotools loads drivers from, and named in DM_VK_DRIVER (nvn_vk.c vk_open; env.txt wins).
+// No driver folder: the phone's own driver
+static void driver_install(void) {
+    char src[1200], dst[1200], a[1500], b[1500], lib[256] = ""; const char *in = g_app->activity->internalDataPath;
+    snprintf(src, sizeof src, "%s/driver", g_files); DIR *d = opendir(src); if (!d || !in) { if (d) closedir(d); return; }
+    snprintf(dst, sizeof dst, "%s/driver", in); mkdir(dst, 0700);
+    struct dirent *e; int n = 0;
+    while ((e = readdir(d))) { if (e->d_name[0] == '.') continue; snprintf(a, sizeof a, "%s/%s", src, e->d_name); snprintf(b, sizeof b, "%s/%s", dst, e->d_name);
+        struct stat sa, sb; if (stat(a, &sa) || !S_ISREG(sa.st_mode)) continue;
+        if (stat(b, &sb) || sb.st_size != sa.st_size || sb.st_mtime < sa.st_mtime) copy_file(a, b);   // changed or new
+        n++;
+        size_t l = strlen(e->d_name); if (!lib[0] && l > 3 && !strcmp(e->d_name + l - 3, ".so")) snprintf(lib, sizeof lib, "%s", e->d_name); }   // (no meta.json: its one library)
+    closedir(d);
+    snprintf(a, sizeof a, "%s/meta.json", dst); FILE *m = fopen(a, "r");
+    if (m) { char j[4096]; size_t k = fread(j, 1, sizeof j - 1, m); j[k] = 0; fclose(m);
+        char *p = strstr(j, "\"libraryName\""); if (p && (p = strchr(p + 13, '"'))) { char *q = strchr(p + 1, '"'); if (q && q - p - 1 < (long)sizeof lib) { memcpy(lib, p + 1, q - p - 1); lib[q - p - 1] = 0; } } }
+    snprintf(a, sizeof a, "%s/%s", dst, lib);
+    struct stat ls; if (!lib[0] || stat(a, &ls)) { fprintf(stderr, "boot: [RED] %s has no driver library (meta.json's libraryName, or one .so): the phone's own driver\n", src); return; }
+    setenv("DM_VK_DRIVER", a, 0); fprintf(stderr, "boot: custom Vulkan driver %s (%d files from %s)\n", getenv("DM_VK_DRIVER"), n, src);
 }
 static void host_start(void) {
     if (g_started++) return;
@@ -268,6 +388,10 @@ static void host_start(void) {
     { pthread_t lt; if (!pthread_create(&lt, NULL, log_mirror, NULL)) pthread_detach(lt); }
     { pthread_t it; if (!pthread_create(&it, NULL, inspector_main, NULL)) pthread_detach(it); }   // the memory inspector (scan.req / peek.req)
     snprintf(p, sizeof p, "%s/env.txt", g_files); env_file(p);
+    device_profile();   // the chip tier's defaults, under env.txt
+    lowspec();
+    driver_install();
+    { char sq[1100]; snprintf(sq, sizeof sq, "%s/shot", g_files); setenv("DM_SHOT_REQ", sq, 0); }   // testing: <files>/shot.req -> <files>/shot.png (nvn_vk.c)
     // Game files: inside the installed APKs (the all-in-one .apks bundle, read through apkfs.c as /nxapk/...), else copied into the files folder
     struct stat st; int inapk = !stat("/nxapk/RomFS", &st);
     snprintf(g_game, sizeof g_game, "%s", inapk ? "/nxapk" : g_files);
@@ -283,6 +407,7 @@ static void host_start(void) {
     { snprintf(p, sizeof p, "%s/aoc", g_game); struct stat as; if (!stat(p, &as)) setenv("DM_AOC_DIR", p, 0); }   // the DLC the player owns (Shield: the Expansion Pass keys; its content is in the update)
     SETG("DM_ROMFS", "RomFS"); SETG("DM_SPV_DIR", "vk"); SETG("DM_NVN_SHMAP", "shader_map.tsv"); SETG("DM_FONT_DIR", "font");
     SETP("DM_SAVE", "save"); SETP("DM_TEMP", "temp");
+    SETP("DM_NVN_CAPTURE", "nvn_capture");   // shaders the pack lacks, saved the first time the game hands them over (nvn_vk.c mtl_shader_seen), for translation on the PC
     // a save brought in from elsewhere (a Switch dump): files put in save_import/ (adb can write there, not into the app's own save/) replace the save at start;
     // the old save is kept as save.before-import-<time>
     { char imp[1200], old[1200], src[1300], dst[1300]; snprintf(imp, sizeof imp, "%s/save_import", g_files); struct stat is;
@@ -306,17 +431,127 @@ static void host_start(void) {
 // when it does not (LAS Recomp's Android port: the prime core otherwise stays parked). The presenting thread also gets the most urgent priority an app may set
 static void *g_hint; static int g_hint_failed; static int64_t g_hint_target;
 static void *(*p_hint_mgr)(void); static void *(*p_hint_create)(void *, const int32_t *, size_t, int64_t);
-static int (*p_hint_target)(void *, int64_t); static int (*p_hint_report)(void *, int64_t);
+static int (*p_hint_target)(void *, int64_t); static int (*p_hint_report)(void *, int64_t); static int (*p_hint_threads)(void *, const int32_t *, size_t);
+// The game's busiest threads (the presenting thread is often not the one with the most work: in Legends: Arceus another game thread used a whole core at normal priority
+// while the presenting one used 40%): every 2 s the threads' CPU time is read from /proc, and those that used over 45% of a core get the presenting thread's priority and
+// join the hint session (APerformanceHint_setThreads, Android 14+), so the scheduler keeps them on the fast cores. At most HOT_MAX besides the presenting thread
+enum { HOT_MAX = 3 };
+static int32_t g_hot[HOT_MAX]; static int g_nhot;
+// The fastest cores (the Snapdragon 8 Elite's two prime Oryon cores at 4.3 GHz, CPUs 6 and 7; on other chips whichever cores have the highest maximum clock): the
+// presenting thread and the busiest game thread are pinned there, the rest left to the scheduler. Found from cpufreq, not core numbers. DM_CPU_PIN=0: no pinning
+static cpu_set_t g_prime; static int g_nprime = -1;
+static void prime_cores(void) {
+    if (g_nprime >= 0) return;
+    g_nprime = 0; CPU_ZERO(&g_prime);
+    const char *e = getenv("DM_CPU_PIN"); if (e && !strcmp(e, "0")) { fprintf(stderr, "[cpu] DM_CPU_PIN=0: threads not pinned\n"); return; }
+    long mf[64]; int n = 0; long top = 0, low = -1;
+    for (int c = 0; c < 64; c++) { char pth[96]; snprintf(pth, sizeof pth, "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", c); FILE *f = fopen(pth, "r");
+        mf[c] = 0; if (f) { if (fscanf(f, "%ld", &mf[c]) != 1) mf[c] = 0; fclose(f); }
+        if (mf[c] > 0) { n = c + 1; if (mf[c] > top) top = mf[c]; if (low < 0 || mf[c] < low) low = mf[c]; } }
+    if (!top || top == low) { fprintf(stderr, "[cpu] all cores alike: threads not pinned\n"); return; }   // one cluster: nothing to choose
+    for (int c = 0; c < n; c++) if (mf[c] == top) { CPU_SET(c, &g_prime); g_nprime++; }
+    fprintf(stderr, "[cpu] fastest cores: %d at %.2f GHz (", g_nprime, top / 1e6); for (int c = 0; c < n; c++) if (mf[c] == top) fprintf(stderr, " %d", c); fprintf(stderr, " )\n");
+}
+static void pin_prime(int32_t tid, const char *what) {
+    prime_cores(); if (g_nprime <= 0) return;
+    if (sched_setaffinity(tid, sizeof g_prime, &g_prime)) fprintf(stderr, "[cpu] %s thread %d: pinning failed (%s)\n", what, tid, strerror(errno));
+    else fprintf(stderr, "[cpu] %s thread %d pinned to the fastest cores\n", what, tid);
+}
+static void hot_threads(void) {
+    static struct { int32_t tid; uint64_t t; } prev[256]; static int nprev; static uint64_t last_ns;
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); uint64_t now = (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+    if (last_ns && now - last_ns < 2000000000ull) return;
+    double span = last_ns ? (now - last_ns) / 1e9 : 0; last_ns = now;
+    DIR *d = opendir("/proc/self/task"); if (!d) return;
+    static struct { int32_t tid; uint64_t t; } cur[256]; int ncur = 0; struct dirent *de; long hz = sysconf(_SC_CLK_TCK); if (hz <= 0) hz = 100;
+    int32_t best[HOT_MAX]; double bu[HOT_MAX]; int nb = 0;
+    while ((de = readdir(d)) && ncur < 256) {
+        int32_t tid = atoi(de->d_name); if (tid <= 0) continue;
+        char pth[64], buf[512]; snprintf(pth, sizeof pth, "/proc/self/task/%d/stat", tid); FILE *f = fopen(pth, "r"); if (!f) continue;
+        size_t n = fread(buf, 1, sizeof buf - 1, f); fclose(f); buf[n] = 0;
+        char *q = strrchr(buf, ')'); if (!q) continue;   // fields after the name: state ppid ... utime (14) stime (15)
+        unsigned long ut = 0, st = 0; if (sscanf(q + 2, "%*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %lu %lu", &ut, &st) != 2) continue;
+        uint64_t t = ut + st; cur[ncur].tid = tid; cur[ncur].t = t; ncur++;
+        if (!span || tid == gettid()) continue;
+        { char cp[64], cm[32] = ""; snprintf(cp, sizeof cp, "/proc/self/task/%d/comm", tid); FILE *cf = fopen(cp, "r"); if (cf) { if (!fgets(cm, sizeof cm, cf)) cm[0] = 0; fclose(cf); }
+          if (!strncmp(cm, "dm-", 3)) continue; }   // the app's own helpers (the touch-menu watcher, the sampler): not the game's threads
+        for (int i = 0; i < nprev; i++) if (prev[i].tid == tid) { double u = (double)(t - prev[i].t) / hz / span;
+            if (u > 0.45) { int k = nb < HOT_MAX ? nb++ : -1; if (k < 0) { k = 0; for (int j = 1; j < HOT_MAX; j++) if (bu[j] < bu[k]) k = j; if (bu[k] >= u) break; }
+                best[k] = tid; bu[k] = u; }
+            break; }
+    }
+    closedir(d);
+    memcpy(prev, cur, sizeof cur[0] * (size_t)ncur); nprev = ncur;
+    if (!nb) return;
+    int changed = nb != g_nhot; for (int i = 0; i < nb && !changed; i++) { int seen = 0; for (int j = 0; j < g_nhot; j++) if (g_hot[j] == best[i]) seen = 1; if (!seen) changed = 1; }
+    if (!changed) return;
+    for (int i = 0; i < nb; i++) { int seen = 0; for (int j = 0; j < g_nhot; j++) if (g_hot[j] == best[i]) seen = 1;
+        if (!seen) { setpriority(PRIO_PROCESS, (id_t)best[i], -10); fprintf(stderr, "[cpu] busy game thread %d (%.0f%% of a core): priority -10, in the hint session\n", best[i], bu[i] * 100); } }
+    { int bi = 0; for (int i = 1; i < nb; i++) if (bu[i] > bu[bi]) bi = i; static int32_t pinned; if (best[bi] != pinned) { if (pinned && g_nprime > 0) { cpu_set_t all; CPU_ZERO(&all); for (int c = 0; c < CPU_SETSIZE && c < 64; c++) CPU_SET(c, &all); sched_setaffinity(pinned, sizeof all, &all); }   // the one before back to every core
+        pin_prime(best[bi], "busiest game"); pinned = best[bi]; } }
+    memcpy(g_hot, best, sizeof best[0] * (size_t)nb); g_nhot = nb;
+    if (g_hint && p_hint_threads) { int32_t t[HOT_MAX + 1]; size_t n = 0; t[n++] = gettid(); for (int i = 0; i < nb; i++) t[n++] = g_hot[i]; p_hint_threads(g_hint, t, n); }
+}
+// ---------- Where the game's own code spends its time (DM_PC_SAMPLE=1) ----------
+// The app is not profileable, so it samples itself: a thread interrupts the presenting thread and the busiest game threads every 2 ms with SIGPROF, the handler keeps
+// the interrupted pc and lr, and every 15 s the most frequent ones go to the log per thread (absolute addresses; the log's "main: base" line turns them into main + offset)
+#include <sys/syscall.h>
+#include <ucontext.h>
+enum { PS_N = 1 << 15 };
+typedef struct { uint64_t pc, lr; int32_t tid; } ps_t;
+static ps_t g_ps[PS_N]; static _Atomic uint32_t g_psn;
+static void on_prof(int sig, siginfo_t *si, void *uc_) {
+    (void)sig; (void)si; ucontext_t *uc = uc_; uint32_t i = atomic_fetch_add(&g_psn, 1);
+    if (i < PS_N) { g_ps[i].pc = uc->uc_mcontext.pc; g_ps[i].lr = uc->uc_mcontext.regs[30]; g_ps[i].tid = gettid(); }
+}
+static int ps_cmp(const void *a, const void *b) { const ps_t *x = a, *y = b; if (x->tid != y->tid) return x->tid < y->tid ? -1 : 1; return x->pc < y->pc ? -1 : x->pc > y->pc; }
+typedef struct { uint64_t pc, lr; uint32_t n; } ps_top;
+static int top_cmp(const void *a, const void *b) { const ps_top *x = a, *y = b; return x->n < y->n ? 1 : x->n > y->n ? -1 : 0; }
+static int32_t g_ps_present;
+static void *ps_main(void *arg) {
+    (void)arg; prctl(PR_SET_NAME, "dm-sampler", 0, 0, 0);
+    struct sigaction sa = {.sa_sigaction = on_prof, .sa_flags = SA_SIGINFO | SA_RESTART | SA_ONSTACK}; sigemptyset(&sa.sa_mask); sigaction(SIGPROF, &sa, NULL);
+    fprintf(stderr, "[pcs] sampling the presenting thread and the busiest game threads every 2 ms\n");
+    static ps_t buf[PS_N]; static ps_top top[4096];
+    for (uint64_t tick = 1;; tick++) {
+        struct timespec ts = {0, 2000000}; nanosleep(&ts, NULL);
+        int32_t t[HOT_MAX + 1]; int n = 0; if (g_ps_present) t[n++] = g_ps_present; for (int i = 0; i < g_nhot && n < HOT_MAX + 1; i++) if (g_hot[i] != g_ps_present) t[n++] = g_hot[i];
+        for (int i = 0; i < n; i++) syscall(SYS_tgkill, getpid(), t[i], SIGPROF);
+        if (tick % 7500) continue;   // 15 s
+        uint32_t m = atomic_exchange(&g_psn, 0); if (m > PS_N) m = PS_N; if (!m) continue;
+        memcpy(buf, g_ps, sizeof *buf * m); qsort(buf, m, sizeof *buf, ps_cmp);
+        for (uint32_t a = 0; a < m;) {   // per thread: its most frequent pcs
+            uint32_t b = a; while (b < m && buf[b].tid == buf[a].tid) b++;
+            int nt = 0; for (uint32_t i = a; i < b;) { uint32_t j = i; while (j < b && buf[j].pc == buf[i].pc) j++; if (nt < 4096) { top[nt].pc = buf[i].pc; top[nt].lr = buf[i].lr; top[nt].n = j - i; nt++; } i = j; }
+            qsort(top, (size_t)nt, sizeof *top, top_cmp);
+            char line[4096]; size_t o = (size_t)snprintf(line, sizeof line, "[pcs] thread %d%s: %u samples, top:", buf[a].tid, buf[a].tid == g_ps_present ? " (presenting)" : "", b - a);
+            for (int k = 0; k < nt && k < 40 && o < sizeof line - 48; k++) o += (size_t)snprintf(line + o, sizeof line - o, " %llx/%llx*%u", (unsigned long long)top[k].pc, (unsigned long long)top[k].lr, top[k].n);
+            fprintf(stderr, "%s\n", line);
+            for (int k = 0; k < nt && k < 8; k++) {   // the top ones named: a host library's function (dladdr), or game code (no library: the log's module bases)
+                Dl_info di, dl; int h = dladdr((void *)(uintptr_t)top[k].pc, &di) && di.dli_fname, hl = dladdr((void *)(uintptr_t)top[k].lr, &dl) && dl.dli_fname;
+                const char *f = h ? strrchr(di.dli_fname, '/') : NULL, *fl = hl ? strrchr(dl.dli_fname, '/') : NULL;
+                unsigned long long po = h ? (unsigned long long)((uintptr_t)top[k].pc - (uintptr_t)(di.dli_sname ? di.dli_saddr : di.dli_fbase)) : 0ull;
+                unsigned long long lo = hl ? (unsigned long long)((uintptr_t)top[k].lr - (uintptr_t)(dl.dli_sname ? dl.dli_saddr : dl.dli_fbase)) : 0ull;
+                fprintf(stderr, "[pcs]   %u x %llx in %s %s+%#llx, called from %s %s+%#llx\n", top[k].n, (unsigned long long)top[k].pc,
+                        h ? (f ? f + 1 : di.dli_fname) : "game", h && di.dli_sname ? di.dli_sname : "", po,
+                        hl ? (fl ? fl + 1 : dl.dli_fname) : "game", hl && dl.dli_sname ? dl.dli_sname : "", lo); }
+            a = b;
+        }
+    }
+    return NULL;
+}
 void front_frame_work(uint64_t busy_ns, uint64_t target_ns) {
     if (g_hint_failed) return;
     if (!g_hint) {
         static int tried; if (tried++) return;
-        setpriority(PRIO_PROCESS, (id_t)gettid(), -10);
+        setpriority(PRIO_PROCESS, (id_t)gettid(), -10); pin_prime(gettid(), "presenting");
+        { const char *e = getenv("DM_PC_SAMPLE"); if (e && atoi(e) > 0) { g_ps_present = gettid(); pthread_t pt; if (!pthread_create(&pt, NULL, ps_main, NULL)) pthread_detach(pt); } }
         void *lib = dlopen("libandroid.so", RTLD_NOW); if (!lib) { g_hint_failed = 1; return; }
         p_hint_mgr = (void *(*)(void))dlsym(lib, "APerformanceHint_getManager");
         p_hint_create = (void *(*)(void *, const int32_t *, size_t, int64_t))dlsym(lib, "APerformanceHint_createSession");
         p_hint_target = (int (*)(void *, int64_t))dlsym(lib, "APerformanceHint_updateTargetWorkDuration");
         p_hint_report = (int (*)(void *, int64_t))dlsym(lib, "APerformanceHint_reportActualWorkDuration");
+        p_hint_threads = (int (*)(void *, const int32_t *, size_t))dlsym(lib, "APerformanceHint_setThreads");
         void *m = p_hint_mgr ? p_hint_mgr() : NULL;
         int32_t t[2]; size_t n = 0; t[n++] = gettid(); if (g_game_tid && g_game_tid != gettid()) t[n++] = g_game_tid;
         g_hint = m && p_hint_create ? p_hint_create(m, t, n, (int64_t)target_ns) : NULL;
@@ -326,6 +561,7 @@ void front_frame_work(uint64_t busy_ns, uint64_t target_ns) {
     }
     if ((int64_t)target_ns != g_hint_target && p_hint_target) p_hint_target(g_hint, g_hint_target = (int64_t)target_ns);
     if (busy_ns) p_hint_report(g_hint, (int64_t)busy_ns);
+    hot_threads();
 }
 // The host's front_run (main.c): the guest already runs on our big-stack host thread
 void front_run(void (*guest)(void)) { guest(); }

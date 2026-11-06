@@ -34,7 +34,12 @@ void dm_pad_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry
 }
 // Timed presses from the host itself (the Android touch menu driver, touch_menu.c): buttons held until the given time, ORed with the other sources
 static _Atomic uint64_t g_auto_btn, g_auto_until;
-void dm_input_press(uint64_t buttons, uint64_t hold_ns) { atomic_store(&g_auto_until, now_ns() + hold_ns); atomic_store(&g_auto_btn, buttons); atomic_fetch_or(&g_latch, buttons); }
+static _Atomic uint64_t g_auto_frame;   // ... and until the game has shown this frame (dm_input_press_frames)
+void dm_input_press(uint64_t buttons, uint64_t hold_ns) { atomic_store(&g_auto_frame, 0); atomic_store(&g_auto_until, now_ns() + hold_ns); atomic_store(&g_auto_btn, buttons); atomic_fetch_or(&g_latch, buttons); }
+// Held for at least hold_ns and at least the next `frames` frames the game shows: some of its controls act only on a button held across several of its frames
+// (Legends: Arceus's item selector takes L / R so; at 5 fps, in the Android Emulator, 0.2 s was one frame and the press did nothing)
+void dm_input_press_frames(uint64_t buttons, uint64_t hold_ns, unsigned frames) {
+    atomic_store(&g_auto_frame, dm_guest_frame() + frames); atomic_store(&g_auto_until, now_ns() + hold_ns); atomic_store(&g_auto_btn, buttons); atomic_fetch_or(&g_latch, buttons); }
 uint64_t dm_input_samples(void) { return (uint64_t)atomic_load(&g_sampling); }
 // DM_KEYS scripted input (for tests): "seconds:key[+key][~hold seconds][*count/interval seconds],...", e.g. "8:A,12:A,15:Down~0.5,16:A+B,40:A*80/2" (A every 2 s from 40 s on, 80 times). Key names A B X Y LS RS L R ZL ZR (plus the sticks LLeft LUp LRight LDown and RLeft RUp RRight RDown) Plus Minus Left Up Right Down, left stick LLeft LUp LRight LDown,
 //   and T<x>x<y> = a touch at normalized picture coordinates (origin top left) for the hold time;
@@ -105,7 +110,7 @@ static void fill(NpadState *s, uint32_t id, uint32_t style) {
     s->sampling = atomic_fetch_add(&g_sampling, 1) + 1;
     if (!(style_of(id) & style)) return;   // no controller of this id / style: attributes = 0
     uint64_t b = atomic_load(&g_btn) | atomic_exchange(&g_latch, 0) | atomic_load(&g_pad_btn) | atomic_exchange(&g_pad_latch, 0);
-    if (now_ns() < atomic_load(&g_auto_until)) b |= atomic_load(&g_auto_btn);
+    if (now_ns() < atomic_load(&g_auto_until) || dm_guest_frame() < atomic_load(&g_auto_frame)) b |= atomic_load(&g_auto_btn);
     uint64_t k = atomic_load(&g_axes), p = atomic_load(&g_pad_axes);
     s->lx = pick(ax(k, 0), ax(p, 0)); s->ly = pick(ax(k, 1), ax(p, 1)); s->rx = pick(ax(k, 2), ax(p, 2)); s->ry = pick(ax(k, 3), ax(p, 3));
     b &= 0xffffull;

@@ -1,6 +1,7 @@
 // NVNformat → Vulkan, entry by entry in NVN enum order, mirroring nvn_fmt_mtl.c (which documents each substitution); the packed 16-bit formats take the Vulkan format with the
 // same bit layout as the Metal one there. Unlisted formats (0 and out of range) return 0.
 #include "nvn_fmt_vk.h"
+#include <stdlib.h>
 
 enum {   // VkFormat values (vulkan_core.h)
     R4G4B4A4 = 2, B5G6R5 = 5, B5G5R5A1 = 6, A1R5G5B5 = 8, R8U = 9, R8S = 10, R8US = 11, R8SS = 12, R8UI = 13, R8I = 14,
@@ -17,6 +18,19 @@ enum {   // VkFormat values (vulkan_core.h)
 };
 static int g_x8d24, g_d24s8;   // the device's 24-bit depth formats work as depth targets (nvn_fmt_vk_depth24)
 void nvn_fmt_vk_depth24(int has_x8d24, int has_d24s8) { g_x8d24 = has_x8d24; g_d24s8 = has_d24s8; }
+static int g_bc = 1;
+void nvn_fmt_vk_bc(int has_bc) { g_bc = has_bc; }
+// BC Vulkan format (131–146) → decode kind (bc_decode.h) and the format it decodes into
+static int bc_kind(uint32_t vk) {
+    static const int8_t k[16] = { 1, 1, 1, 1, 2, 2, 3, 3, 4, -4, 5, -5, 6, -6, 7, 7 };
+    return vk >= 131 && vk <= 146 ? k[vk - 131] : 0;
+}
+static uint32_t bc_plain(uint32_t vk) {
+    switch (bc_kind(vk)) {
+    case 4: return 9; case -4: return 10; case 5: return 16; case -5: return 17; case 6: case -6: return 97;   // R8 / R8 snorm / RG8 / RG8 snorm / RGBA16F
+    default: return vk == 132 || vk == 134 || vk == 136 || vk == 138 || vk == 146 ? 43 : 37;                   // RGBA8 sRGB / UNORM
+    }
+}
 
 typedef struct { uint16_t vk; uint8_t kind, noalpha, rb; } ent;
 #define E(m) {m, 1, 0, 0}
@@ -57,13 +71,18 @@ static const ent T[0x9D] = {
     [0x99] = X(BGRA8U), E(BGRA8U), X(BGRA8SRGB), E(BGRA8SRGB),
 };
 
+int nvn_fmt_vk_decode(int f) {
+    if (g_bc || f < 0x41 || f > 0x50 || f >= (int)(sizeof T / sizeof *T)) return 0;
+    return T[f].kind ? bc_kind(T[f].vk) : 0;
+}
 int nvn_fmt_to_vk(int f, uint32_t *vk, uint8_t swz[4]) {
     ent e = {0, 0, 0, 0};
     if (f >= 0x79 && f <= 0x94) { int k = (f - 0x79) % 14; e = (ent){(uint16_t)(ASTC0 + 2 * k + (f >= 0x87)), 1, 0, 0}; }
     else if (f > 0 && f < (int)(sizeof T / sizeof *T)) e = T[f];
     if (f == 0x33 && g_x8d24) e = (ent){X8D24, 1, 0, 0};
     if (f == 0x35 && g_d24s8) e = (ent){D24S8, 1, 0, 0};
-    if (vk) *vk = e.kind ? e.vk : 0;
+    { static int sw = -1; if (sw < 0) { const char *s = getenv("DM_VK_BC6_SWAP"); sw = s && *s == '1'; } if (sw && (f == 0x4F || f == 0x50)) e.vk = f == 0x4F ? BC6HU : BC6HS; }   // debugging
+    if (vk) *vk = e.kind ? (!g_bc && bc_kind(e.vk) ? bc_plain(e.vk) : e.vk) : 0;
     if (swz) { swz[0] = e.rb ? NVN_SWZ_B : NVN_SWZ_R; swz[1] = NVN_SWZ_G; swz[2] = e.rb ? NVN_SWZ_R : NVN_SWZ_B; swz[3] = e.noalpha ? NVN_SWZ_ONE : NVN_SWZ_A; }
     return e.kind;
 }
