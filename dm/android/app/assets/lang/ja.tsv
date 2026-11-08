@@ -264,3 +264,7 @@ Auto: on with ARM's driver (v0.52)	自動：ARMのドライバーでオン (v0.5
 Off: the shaders as before v0.52	オフ：v0.52以前のシェーダー
 Merge render passes	レンダーパスを統合
 Off: every render target change starts a new pass	オフ：レンダーターゲットを変えるたびに新しいパスを開始
+Lower specs	軽量設定
+Off: the world as the game draws it	オフ：ゲーム本来の描画
+On: shorter draw distance for Pokémon, people and trees, lighter shadows	オン：ポケモン・人・木の描画距離を短く、影を軽く
+Lowest: shorter draw distance and no shadows	最低：描画距離を短く、影なし

@@ -264,3 +264,7 @@ Auto: on with ARM's driver (v0.52)	Auto : activé avec le pilote d'ARM (v0.52)
 Off: the shaders as before v0.52	Désactivé : les shaders comme avant la v0.52
 Merge render passes	Fusionner les passes de rendu
 Off: every render target change starts a new pass	Désactivé : chaque changement de cible de rendu commence une nouvelle passe
+Lower specs	Configuration allégée
+Off: the world as the game draws it	Non : le monde tel que le jeu le dessine
+On: shorter draw distance for Pokémon, people and trees, lighter shadows	Oui : distance d'affichage réduite pour les Pokémon, les gens et les arbres, ombres allégées
+Lowest: shorter draw distance and no shadows	Minimal : distance d'affichage réduite et pas d'ombres

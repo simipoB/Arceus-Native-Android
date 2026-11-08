@@ -82,6 +82,8 @@ final class GameSettings {
     // the frame-rate setting: Sword / Shield 1.3.2 (loader.c fps_patch), Scarlet / Violet 4.0.0 (loader.c's built-in Dynamic FPS mod)
     static final boolean AUTO_60 = false;
     static boolean has60(Context c) { String id = game(c)[0]; return "01008DB008C2C000".equalsIgnoreCase(id) || "0100ABF008968000".equalsIgnoreCase(id) || paldea(c); }
+    // Pokémon Legends: Arceus: its "Lower specs" (the POTATO mod's RomFS files, android_main.c lowspec); no 60 fps (the game counts frames: at 60 it runs fast)
+    static boolean arceus(Context c) { return "01001F5010DFA000".equalsIgnoreCase(game(c)[0]); }
     static boolean paldea(Context c) { String id = game(c)[0]; return "0100A3D008C5C000".equalsIgnoreCase(id) || "01008F6008C5E000".equalsIgnoreCase(id); }
 
     // What Auto gives this phone, from what it is rather than a list of models: { chip family, a description, graphics, textures, anisotropic filtering, frame rate, upscaler }.

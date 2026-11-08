@@ -17,6 +17,7 @@ uint64_t dm_input_samples(void);   // Cumulative number of times the game has sa
 void dm_pad_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry);
 // A press from the host itself (touch_menu.c): the buttons held for hold_ns, latched so the game sees them even between its reads
 void dm_input_press(uint64_t buttons, uint64_t hold_ns);
+void dm_input_press_frames(uint64_t buttons, uint64_t hold_ns, unsigned frames);   // held at least hold_ns and the game's next `frames` frames
 
 // Optional diagnostic DM_HID_RECEIPT_LOG=<writable JSONL path>: received samples of real GetNpadState returns.
 // Fields read_start_ns/time_ns use the same host now_ns(); the front-end publish window must use the same helper, and a read interval that spans a publish must not be force-matched.

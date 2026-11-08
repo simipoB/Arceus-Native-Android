@@ -6,6 +6,9 @@
 #include <dlfcn.h>
 #include <sys/ucontext.h>
 #include <unistd.h>
+#ifdef __linux__
+#include <sys/uio.h>   // process_vm_readv (fault kind without ESR)
+#endif
 #include <sys/mman.h>
 #include <libkern/OSCacheControl.h>
 #include <mach/mach.h>
@@ -136,6 +139,12 @@ static void on_crash(int sig, siginfo_t *si, void *uc_) {
     if (sig == SIGILL && dm_crypto_emu && dm_crypto_emu(uc)) return;   // an ARMv8 crypto instruction the CPU lacks (the emulator's ARM translation): done in software, crypto_emu.c
     if (sig == SIGSEGV || sig == SIGBUS) {
         int is_write = (int)((DM_UC_ESR(uc) >> 6) & 1);   // The WnR bit of ESR
+#ifdef __linux__
+        if (!dm_uc_rec(uc, ESR_MAGIC)) {   // no ESR record (the Android Emulator's ARM translation): a fault on a page the kernel reads is a write
+            uint8_t b; struct iovec l = { &b, 1 }, r = { si->si_addr, 1 };
+            is_write = process_vm_readv(getpid(), &l, 1, &r, 1, 0) == 1 ? 1 : -1;   // -1: unknown (device memory the kernel will not read for us): hooks decide by their own pages
+        }
+#endif
         for (int i = 0; i < g_nfault_hook; i++) if (g_fault_hook[i](si->si_addr, is_write, uc)) return;
     }
     crash_gate(sig);
@@ -156,6 +165,14 @@ static void on_crash(int sig, siginfo_t *si, void *uc_) {
     fprintf(stderr, "[dm] CRASH sig=%d", sig);
     off("addr", (uint64_t)si->si_addr); off("pc", DM_UC_SS(uc).__pc); off("lr", DM_UC_SS(uc).__lr);
     fprintf(stderr, " sp=%#llx\n", DM_UC_SS(uc).__sp);
+#ifdef __linux__
+    if (sig == SIGSEGV || sig == SIGBUS) {   // the mappings around the faulting address (code / permissions / file), from /proc/self/maps
+        FILE *mf = fopen("/proc/self/maps", "r"); char ln[300]; uintptr_t fa = (uintptr_t)si->si_addr;
+        while (mf && fgets(ln, sizeof ln, mf)) { unsigned long s0, e0; if (sscanf(ln, "%lx-%lx", &s0, &e0) == 2 && e0 + 0x400000 > fa && s0 < fa + 0x400000) fprintf(stderr, "[dm]   map %s", ln); }
+        if (mf) fclose(mf);
+        fprintf(stderr, "[dm]   si_code %d\n", si->si_code);
+    }
+#endif
     for (int i = 0; i < 29; i++) fprintf(stderr, "x%d=%#llx%s", i, DM_UC_SS(uc).__x[i], i % 6 == 5 ? "\n" : " ");
     fprintf(stderr, "\n");
     // What the registers point at: the first six words of each readable target (read with vm_read_overwrite, which fails instead of faulting); a word inside a module prints as a module offset, so an object's vtable names its class

@@ -264,3 +264,7 @@ Auto: on with ARM's driver (v0.52)	Auto: ligado com o driver da ARM (v0.52)
 Off: the shaders as before v0.52	Desligado: os shaders como antes da v0.52
 Merge render passes	Unir passagens de renderização
 Off: every render target change starts a new pass	Desligado: cada mudança de alvo de renderização inicia uma nova passagem
+Lower specs	Requisitos menores
+Off: the world as the game draws it	Não: o mundo como o jogo o desenha
+On: shorter draw distance for Pokémon, people and trees, lighter shadows	Sim: menor distância de desenho para Pokémon, pessoas e árvores, sombras mais leves
+Lowest: shorter draw distance and no shadows	Mínimo: menor distância de desenho e sem sombras

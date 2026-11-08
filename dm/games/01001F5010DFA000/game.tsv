@@ -1,0 +1,77 @@
+# Pokémon Legends: Arceus, SDK 11. Started from dm/games/profile_guess.py's survey of the owner's 1.1.1 dump (androidswithy), then booted and played on a Galaxy S25+;
+# on the Galar Native engine since 2026-11-08 (its setup on the phone, menu, drivers, Mali / Xclipse routes)
+
+# ---- Identity ----
+title_id	01001F5010DFA000
+program_id	01001F5010DFA000
+
+# ---- App ----
+# the app's name when it runs this game, where its official releases are, and its icon: the ball's top colour and the ground (build_apk.py)
+app_repo	github.com/simipoB/Arceus-Native-Android
+app_icon	d9b45a 151b2b
+app_name	Arceus Native
+name	Pokémon Legends: Arceus
+ipa	PokMonLegendsArceus.ipa
+app_category	public.app-category.games
+
+# ---- Versions ----
+build	v262144	1.1.1	main=aee8f150dda1b5a838806e1a5ea6827a	subsdk1=4dd097b435891c5e0e15a65dbe47124f	sdk=b39add63421be525d352e576dab438d3
+package	v262144
+shader_versions	v262144
+
+# ---- Files ----
+# not loaded, main takes nothing from them the host does not supply: subsdk0 (NintendoSDK_movie)
+modules	main subsdk1 sdk
+romfs_marker	bin/sound/NX64/wwise/bank/Default.pck
+zip_store	.bfotf:.bnk:.gfpak:.pck:.ptcl:.metallib
+
+# ---- Graphics ----
+
+# ---- Memory ----
+# the NPDM declares 16 MB of system resource (virtual address memory) and main sets a heap: a 5 GB block with a large alias region; the heap check sizes the heap region from the heap the game asks for
+mem_reserve	0x160000000
+mem_alias	0x138000000
+mem_stack	0x10000000
+app_pool	0xCD500000
+# the pool bounds what the allocator maps (its address space is cut from 32 GB to 4 GB in patch_nso.py)
+mem_map_limit	on
+
+# ---- NVN driver constant segments (Mario's values, the translator's built-in layout, unless the engine says otherwise) ----
+nvn_tex_base	0x20
+nvn_tex_slots	32
+nvn_samp_base	0x568
+nvn_img_base	0x120
+nvn_img_slots	8
+nvn_ssbo_bases	vs=0x110 ps=0x510 cs=0x310
+
+# ---- Shader split ----
+shader_groups	/bin/=bin /system_resource/=systemresource
+shader_note	Pokémon Legends: Arceus shaders (provisional profile)
+# the RomFS has Game Freak packs (GFLXPACK .gfpak: Pokémon Legends: Arceus) and main links Oodle: entries of compression 3 are Oodle, decoded for the split by the game's own decoder in the Mac host (dm/host/hle_oodle.c)
+shader_oodle	on
+# shaders the game builds in memory: saved on the first runs and translated at the next start (Galar Native's capture path)
+shader_nvn_capture	on
+
+# heap check: 2026-10-23, heap 0.02 GB
+
+# ---- Shared font ----
+# the game hands the shared font address straight to ScalableFontEngine::LoadFont (no Decode), as SDK 10 and older do: with the BFTTF header every "?" lookup missed and main+0x11f890 crashed on null
+shared_font	ttf
+
+# ---- Touch controls (Android) ----
+# ZL aims, ZR throws: shown beside L and R
+touch_zlzr	on
+# Taps on menu items move the game's cursor there and press A (touch_menu.c): the ui2d pane classes found in main 1.1.1's memory (by their name-keyed objects
+# and fields: name at +0xb0, parent at +0x18), valid for this build only
+touch_menu	on
+touch_menu_build	aee8f150dda1b5a838806e1a5ea6827a
+touch_menu_panes	0x404c2e8 0x404be40 0x404c0a0 0x404bf78 0x404c648 0x404c770
+# The list selection class (count +0x8, selected index +0x14, columns +0x20, rows shown +0x24; found by the index following the D-pad): a tap writes the
+# tapped item's index next to it and one D-pad press moves there, in place of walking the cursor (the Satchel's items, its party)
+touch_menu_lists	0x416ee48
+# The pop-up choice class (selected choice +0x8, choices +0x10: the Satchel's Use / Favorite / Discard / Cancel): a tap on a choice selects it the same way
+touch_menu_popups	0x416ece8
+# On phones: handheld mode (the game's lower render resolution); about 20 fps docked in Jubilife on the Galaxy S25+
+android_op_mode	handheld
+# heavier than the Sword / Shield the Auto tiers were set on (about 20 fps docked on a Galaxy S25+): Auto picks one tier lower (GameSettings.profile)
+android_heavy	on

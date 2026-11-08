@@ -14,6 +14,7 @@
 #include <android_native_app_glue.h>
 #include <pthread.h>
 #include <sched.h>
+#include <errno.h>
 #include <jni.h>
 #include <sys/resource.h>
 #include <dlfcn.h>
@@ -246,6 +247,13 @@ static int32_t on_input(struct android_app *app, AInputEvent *e) {
     if (type == AINPUT_EVENT_TYPE_KEY) {
         int32_t kc = AKeyEvent_getKeyCode(e); uint64_t b = key_bit(kc);
         if (kc == AKEYCODE_BACK && !b) { uint64_t m = AKeyEvent_getAction(e) == AKEY_EVENT_ACTION_DOWN ? DM_BTN_B : 0; dm_input_set(g_touch_btn | m, g_touch_s[0], g_touch_s[1], g_touch_s[2], g_touch_s[3]); return 1; }   // the system back = B (the game never closes on back)
+        static uint8_t wasd; int wb = kc == AKEYCODE_W ? 1 : kc == AKEYCODE_S ? 2 : kc == AKEYCODE_A ? 4 : kc == AKEYCODE_D ? 8 : 0;
+        if (wb) {   // WASD: the left stick, full tilt
+            if (AKeyEvent_getAction(e) == AKEY_EVENT_ACTION_DOWN) wasd |= wb; else if (AKeyEvent_getAction(e) == AKEY_EVENT_ACTION_UP) wasd &= ~wb;
+            int k = pad_slot(AInputEvent_getDeviceId(e));
+            g_pads[k].lx = (wasd & 8 ? DM_STICK_MAX : 0) - (wasd & 4 ? DM_STICK_MAX : 0); g_pads[k].ly = (wasd & 1 ? DM_STICK_MAX : 0) - (wasd & 2 ? DM_STICK_MAX : 0);
+            pads_merge(); return 1;
+        }
         if (!b) return 0;
         int k = pad_slot(AInputEvent_getDeviceId(e));
         if (AKeyEvent_getAction(e) == AKEY_EVENT_ACTION_DOWN) g_pads[k].btn |= b; else if (AKeyEvent_getAction(e) == AKEY_EVENT_ACTION_UP) g_pads[k].btn &= ~b;
@@ -275,7 +283,13 @@ static int32_t on_input(struct android_app *app, AInputEvent *e) {
         g_pads[k].hat = (hx < -0.5f ? DM_BTN_LEFT : 0) | (hx > 0.5f ? DM_BTN_RIGHT : 0) | (hy < -0.5f ? DM_BTN_UP : 0) | (hy > 0.5f ? DM_BTN_DOWN : 0) | (lt > 0.5f ? DM_BTN_ZL : 0) | (rt > 0.5f ? DM_BTN_ZR : 0);
         pads_merge(); return 1;
     }
-    if (type == AINPUT_EVENT_TYPE_MOTION && (src & AINPUT_SOURCE_TOUCHSCREEN)) { touch_update(e); return 1; }
+    // touch, and a mouse as touch (the Android Emulator's window, a mouse on a phone): its button press / release arrive as DOWN / UP; hover moves are ignored
+    if (type == AINPUT_EVENT_TYPE_MOTION && ((src & AINPUT_SOURCE_TOUCHSCREEN) == AINPUT_SOURCE_TOUCHSCREEN || (src & AINPUT_SOURCE_MOUSE) == AINPUT_SOURCE_MOUSE)) {
+        int32_t act = AMotionEvent_getAction(e) & AMOTION_EVENT_ACTION_MASK;
+        if (act == AMOTION_EVENT_ACTION_HOVER_MOVE || act == AMOTION_EVENT_ACTION_HOVER_ENTER || act == AMOTION_EVENT_ACTION_HOVER_EXIT || act == AMOTION_EVENT_ACTION_SCROLL ||
+            act == AMOTION_EVENT_ACTION_BUTTON_PRESS || act == AMOTION_EVENT_ACTION_BUTTON_RELEASE) return 1;
+        static int said; if (!said++) fprintf(stderr, "[dm] input: first pointer event (source %#x, action %d)\n", src, act);
+        touch_update(e); return 1; }
     return 0;
 }
 
@@ -466,6 +480,33 @@ static void device_profile(void) {
     fprintf(stderr, "boot: device profile %s, %s (chip %s %s%s, %.1f GB memory): graphics %s, anisotropic filtering %sx, textures %s\n", p ? p->name : "none", p ? p->what : "chip not in the table",
             *maker ? maker : "?", *model ? model : "unknown", force ? ", DM_PROFILE" : "", gb, g ? g : "default", an ? an : "default", tq ? tq : "full");
 }
+#if DM_GAME_PROGRAM_ID == 0x01001F5010DFA000ull   // (Legends: Arceus only: its RomFS files)
+// "Lower specs" (the settings' DM_LOWSPEC: 1 lower, 2 lowest), for phones that cannot hold the game's frame rate: the POTATO mod's RomFS files, kept in this library
+//   (lowspec_files.h) and written to <files>/lowspec on start, are laid over the game's RomFS (hle_fs.c DM_ROMFS_OVERLAY, first root wins): a shorter draw distance for
+//   Pokémon, people and trees (bin/misc/app_config/field_common_config.bin) and lighter shadows, at 1 fewer (Low Shadows), at 2 none (No Shadows: field_shadow_config.bin)
+#include "lowspec_files.h"
+static int write_all(const char *path, const unsigned char *b, size_t n) {
+    char d[1200]; snprintf(d, sizeof d, "%s", path);
+    for (char *s = d + 1; *s; s++) if (*s == '/') { *s = 0; mkdir(d, 0770); *s = '/'; }
+    FILE *f = fopen(path, "wb"); if (!f) return 0;
+    int ok = fwrite(b, 1, n, f) == n; return fclose(f) == 0 && ok;
+}
+static void lowspec(void) {
+    const char *e = getenv("DM_LOWSPEC"); int lv = e ? atoi(e) : 0; if (lv < 1 || lv > 2) return;
+    char root[1100], f[1300]; snprintf(root, sizeof root, "%s/lowspec/romfs", g_files);
+    snprintf(f, sizeof f, "%s/bin/misc/app_config/field_common_config.bin", root);
+    int ok = write_all(f, LS_draw_distance, sizeof LS_draw_distance);
+    snprintf(f, sizeof f, "%s/bin/misc/app_config/field_shadow_config.bin", root);
+    ok &= lv == 2 ? write_all(f, LS_no_shadows, sizeof LS_no_shadows) : write_all(f, LS_low_shadows, sizeof LS_low_shadows);
+    if (!ok) { fprintf(stderr, "boot: [RED] lower specs: could not write %s\n", root); return; }
+    const char *o = getenv("DM_ROMFS_OVERLAY"); char all[4096];
+    snprintf(all, sizeof all, "%s%s%s", root, o && *o ? ":" : "", o && *o ? o : "");   // (ahead of any other overlay)
+    setenv("DM_ROMFS_OVERLAY", all, 1);
+    fprintf(stderr, "boot: lower specs %d: shorter draw distance, %s (RomFS overlay %s)\n", lv, lv == 2 ? "no shadows" : "lighter shadows", root);
+}
+#else
+static void lowspec(void) { }
+#endif
 static pid_t g_game_tid;   // the game's main thread (performance hints below)
 static void *host_thread(void *a) {
     g_game_tid = gettid();
@@ -639,13 +680,20 @@ static void inspector_tree(FILE *req, FILE *out) {
     char ln[128]; while (fgets(ln, sizeof ln, req)) { unsigned long a, per; if (sscanf(ln, "%lx %lx", &a, &per) != 2) continue; if (per > 0x1000) per = 0x1000;
         int count = 0; fprintf(out, "# tree %lx\n", a); tree_walk(out, a, per, 0, &count); fprintf(out, "# %d nodes\n", count); }
 }
+// poke.req: lines "<hex address> <hex bytes>" written into the process (debugging: flip a byte in a live game object); bad addresses fail, not crash → poke.out
+static void inspector_poke(FILE *req, FILE *out) {
+    char ln[1200]; while (fgets(ln, sizeof ln, req)) { unsigned long a; char hex[1024]; if (sscanf(ln, "%lx %1023s", &a, hex) != 2) continue;
+        uint8_t b[512]; size_t n = 0; for (const char *h = hex; h[0] && h[1] && n < sizeof b; h += 2) { unsigned v; if (sscanf(h, "%2x", &v) != 1) break; b[n++] = (uint8_t)v; }
+        struct iovec l = { b, n }, r = { (void *)a, n }; ssize_t w = process_vm_writev(getpid(), &l, 1, &r, 1, 0);
+        fprintf(out, "%lx %zu bytes: %s\n", a, n, w == (ssize_t)n ? "written" : "failed"); }
+}
 static void *inspector_main(void *p) {
     (void)p; char q[1200], o[1200], t[1200];
     for (;;) { sleep(1);
-        static const char *kind[3] = { "scan", "peek", "tree" };
-        for (int k = 0; k < 3; k++) { snprintf(q, sizeof q, "%s/%s.req", g_files, kind[k]); FILE *r = fopen(q, "r"); if (!r) continue;
+        static const char *kind[4] = { "scan", "peek", "tree", "poke" };
+        for (int k = 0; k < 4; k++) { snprintf(q, sizeof q, "%s/%s.req", g_files, kind[k]); FILE *r = fopen(q, "r"); if (!r) continue;
             snprintf(t, sizeof t, "%s/%s.tmp", g_files, kind[k]); snprintf(o, sizeof o, "%s/%s.out", g_files, kind[k]); FILE *w = fopen(t, "w");
-            if (w) { if (k == 2) inspector_tree(r, w); else if (k) inspector_peek(r, w); else inspector_scan(r, w); fclose(w); rename(t, o); } fclose(r); unlink(q); } }
+            if (w) { if (k == 3) inspector_poke(r, w); else if (k == 2) inspector_tree(r, w); else if (k) inspector_peek(r, w); else inspector_scan(r, w); fclose(w); rename(t, o); } fclose(r); unlink(q); } }
     return NULL;
 }
 static void host_start(void) {
@@ -666,6 +714,7 @@ static void host_start(void) {
     { const char *le = getenv("DM_LAST_EXIT"); if (le && *le) fprintf(stderr, "boot: Android says the previous run ended: %s\n", le); }
     fps_guard_init();   // (before the phone profile: Graphics chosen by hand only)
     device_profile();   // the chip tier's defaults, under env.txt
+    lowspec();   // Legends: Arceus's "Lower specs" (DM_LOWSPEC): its RomFS files first in the overlay
     // Game files: inside the installed APKs (the all-in-one .apks bundle, read through apkfs.c as /nxapk/...), else copied into the files folder
     struct stat st; int inapk = !stat("/nxapk/RomFS", &st);
     snprintf(g_game, sizeof g_game, "%s", inapk ? "/nxapk" : g_files);

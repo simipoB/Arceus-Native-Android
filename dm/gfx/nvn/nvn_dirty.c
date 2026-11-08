@@ -84,7 +84,7 @@ static int release_page(range_t *r, uintptr_t p, _Atomic uint64_t *count) {
 }
 static int on_fault(void *addr, int is_write, void *uc) {
     (void)uc;
-    if (!is_write) return 0;
+    if (!is_write) return 0;   // (-1 = unknown: a fault on a page this module made read-only is a write; pages it never protected are not released below)
     uintptr_t a = (uintptr_t)addr; int ours = 0, n = atomic_load(&g_nr);
     for (int i = 0; i < n; i++)   // Every range sharing the page must be released: releasing only one leaves the other range's state at "protected", and later writes no longer fault and are missed
         { range_t *r = rg(i); if (live_at(i) && a >= r->base && a < r->end) ours |= release_page(r, (a - r->base) >> g_shift, &g_faults); }

@@ -2931,6 +2931,17 @@ static void push_stage(vshader *s, int st, VkPipelineBindPoint bp, VkPipelineLay
                 else if (h->skind == S_ID) sid = h->sreg;
                 VkImageView v = tid ? tex_view_for(tid, r, storage) : VK_NULL_HANDLE;
                 if (TD_TRACE) VLOG("[trace]   %s %s tid %d ser=%llu%s", storage ? "image" : "texture", r->name, tid, 0ull, v ? "" : " (no view: dummy)");
+                // DM_VK_TEXOVR=<fs key>:<binding>=0|1,...: that binding reads 0 or 1. Without it, the game profile's tex_unwritten_one pairs read 1 (textures the game
+                // never draws on this host: Pokémon Legends: Arceus' ambient occlusion result, whose pass never runs); DM_VK_TEXOVR=none turns that off
+                if (!storage) { static const char *ov = (const char *)1; if (ov == (const char *)1) { ov = getenv("DM_VK_TEXOVR");
+                        if (ov && !strcmp(ov, "none")) ov = NULL;
+                        else if (!ov && DM_GAME_TEX_UNWRITTEN_ONE[0]) { static char def[4096]; size_t o = 0; const char *q = DM_GAME_TEX_UNWRITTEN_ONE;
+                            while (*q && o + 64 < sizeof def) { const char *e = strchr(q, ' '); size_t n = e ? (size_t)(e - q) : strlen(q); o += (size_t)snprintf(def + o, sizeof def - o, "%.*s=1,", (int)n, q); q += n; while (*q == ' ') q++; }
+                            ov = def; VLOG("textures the game never draws here, read as 1: %s", DM_GAME_TEX_UNWRITTEN_ONE); } }
+                    if (ov) { char pat[96]; snprintf(pat, sizeof pat, "%s:%s=", s->key, r->name); const char *m = strstr(ov, pat);
+                        if (m) { int k = vkind(r); vtex *dx = r->depth && k <= 3 ? g_dummy_depth[k] : g_dummy[k][r->sclass < 3 ? r->sclass : 0]; uint8_t c = m[strlen(pat)] == '1' ? VK_COMPONENT_SWIZZLE_ONE : VK_COMPONENT_SWIZZLE_ZERO;
+                                 uint8_t sw[4] = { c, c, c, c }; uint32_t nl = k == 2 || k == 3 ? 6 : 1;
+                                 v = view_get(dx, VK_OF_KIND[k], dx->fmt, 0, 1, 0, nl, sw, dx->aspect & VK_IMAGE_ASPECT_DEPTH_BIT ? VK_IMAGE_ASPECT_DEPTH_BIT : dx->aspect); } } }
                 if (!v) v = dummy_view(r, storage);
                 VkSampler smp = storage ? VK_NULL_HANDLE : (tid && tex_is_int(tid) ? samp_nearest_by_id(sid) : samp_by_id(sid)); if (!storage && !smp) smp = g_dummy_samp;
                 ii[nw] = (VkDescriptorImageInfo){ smp, v, VK_IMAGE_LAYOUT_GENERAL }; w[nw].pImageInfo = &ii[nw]; nw++; break;
@@ -3756,7 +3767,7 @@ static int ovl_draw_turned(VkCommandBuffer cb, VkImage img, VkImageView view, Vk
     for (int i = 0; i < n; i++) {
         dm_ovl_item *q = &it[i];
         ovl_pc pc = { { q->x, q->y, q->w, q->h }, { q->r, q->g, q->b, q->a }, { (float)q->shape, q->ring, q->radius, q->h > 0 ? q->w / q->h : 1 },
-                      { (float)q->glyph, q->gscale > 0 ? q->gscale : 0.5f, q->galpha, 0 }, { (float)lext.width, (float)lext.height }, (float)rot };
+                      { (float)q->glyph, q->gscale > 0 ? q->gscale : 0.5f, q->galpha, q->gdark }, { (float)lext.width, (float)lext.height }, (float)rot };
         vkCmdPushConstants(cb, O.pl, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof pc, &pc);
         vkCmdDraw(cb, 6, 1, 0, 0);
     }

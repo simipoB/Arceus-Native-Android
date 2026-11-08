@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-enum { OVL_DISC = 0, OVL_RING = 1, OVL_RRECT = 2 };
+enum { OVL_DISC = 0, OVL_RING = 1, OVL_RRECT = 2, OVL_HALF = 3 };   // (OVL_HALF: a disc's top half; Vulkan overlay only)
 enum { OVL_G_A, OVL_G_B, OVL_G_X, OVL_G_Y, OVL_G_L, OVL_G_R, OVL_G_ZL, OVL_G_ZR, OVL_G_PLUS, OVL_G_MINUS, OVL_G_NONE = -1 };
 typedef struct {
     float x, y, w, h;          // rectangle, pixels
@@ -13,6 +13,7 @@ typedef struct {
     int shape; float ring;     // OVL_*; ring width as a fraction of the radius (OVL_RING)
     float radius;              // OVL_RRECT corner radius, fraction of the height
     int glyph; float gscale, galpha;   // OVL_G_* label, its size as a fraction of the control, its opacity
+    float gdark;               // the label's darkness: 0 white .. 1 black (Vulkan overlay only; Metal draws it white)
 } dm_ovl_item;
 // Fills up to max items for a surface of width x height pixels; returns how many (0: nothing drawn)
 int front_overlay(dm_ovl_item *it, int max, int width, int height);

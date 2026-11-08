@@ -220,7 +220,7 @@ public final class SetupActivity extends Activity {
     private String gamesNamed() { List<String> n = new ArrayList<>(); for (String[] g : GameSettings.games(this)) n.add(g[1]); return String.join(" " + T.t(this, "or") + " ", n); }
     // the game's colour: the launcher's cards, this screen's buttons
     static int accent(String id) { String up = id.toUpperCase(java.util.Locale.ROOT);
-        return up.startsWith("0100ABF") ? 0xFF2E9BFF : up.startsWith("01008DB") ? 0xFFE0306E : up.startsWith("01008F6") ? 0xFF9B5CFF : up.startsWith("0100A3D") ? 0xFFFF4D3D : 0xFF3DDC97; }
+        return up.startsWith("0100ABF") ? 0xFF2E9BFF : up.startsWith("01008DB") ? 0xFFE0306E : up.startsWith("01008F6") ? 0xFF9B5CFF : up.startsWith("0100A3D") ? 0xFFFF4D3D : up.startsWith("01001F5") ? 0xFFD9B45A : 0xFF3DDC97; }
     private TextView text(LinearLayout parent, String s, float size, int color, boolean bold) {
         TextView t = new TextView(this); t.setText(s); t.setTextSize(size); t.setTextColor(color); if (bold) t.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
         parent.addView(t, new LinearLayout.LayoutParams(-1, -2)); return t;

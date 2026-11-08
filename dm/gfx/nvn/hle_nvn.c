@@ -837,6 +837,13 @@ NVN(nvnCommandBufferSetViewports, void, NVNcommandBuffer *c, int first, int n, c
 NVN(nvnCommandBufferSetScissor, void, NVNcommandBuffer *c, int x, int y, int w, int h) { *REC(c, OP_SCISSOR, p_scissor) = (p_scissor){x, y, w, h}; }
 NVN(nvnCommandBufferSetDepthRange, void, NVNcommandBuffer *c, float n, float f) { *REC(c, OP_DEPTH_RANGE, p_depth_range) = (p_depth_range){n, f}; }
 NVN(nvnCommandBufferBindProgram, void, NVNcommandBuffer *c, const NVNprogram *p, int stages) {
+    { static const char *tr = (const char *)1; if (tr == (const char *)1) tr = getenv("DM_VK_TRACE_FS");   // debugging: the programs DM_VK_TRACE_FS names, as the game records them
+      if (tr && p) for (unsigned st = 0; st < ((const prog_t *)p)->nstage; st++) { uint8_t k[8]; char hex[17]; if (!prog_key((const prog_t *)p, st, k)) continue;
+          for (int q = 0; q < 8; q++) sprintf(hex + 2 * q, "%02x", k[q]);
+          if (strstr(tr, hex)) { static int n_; if (n_++ < 40) { char all[160] = ""; size_t o = 0;
+                  for (unsigned s2 = 0; s2 < ((const prog_t *)p)->nstage && o + 20 < sizeof all; s2++) { uint8_t k2[8]; if (!prog_key((const prog_t *)p, s2, k2)) continue;
+                      for (int q = 0; q < 8; q++) o += (size_t)sprintf(all + o, "%02x", k2[q]); all[o++] = ' '; all[o] = 0; }
+                  LOG("[trace] recorded: BindProgram %s (stages %#x; all stages: %s) into command buffer %p, recording %d", hex, stages, all, (void *)c, CB(c)->recording); } break; } } }
     *REC(c, OP_BIND_PROGRAM, p_bind_program) = (p_bind_program){(const prog_t *)p, stages};
 }
 static void bind_state(NVNcommandBuffer *c, int kind, const void *st, size_t n) { p_bind_state *r = REC(c, OP_BIND_STATE, p_bind_state); r->kind = kind; memcpy(r->bytes, st, n); }
