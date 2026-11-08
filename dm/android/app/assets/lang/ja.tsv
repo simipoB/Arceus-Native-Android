@@ -273,3 +273,9 @@ On: smooth ground lighting, no purple shadows	オン：地面の陰影をなめ�
 Off: the ground's full lighting detail (purple shadows in places)	オフ：地面の陰影を細部まで（場所により紫の影）
 Preparing the ground's lighting (No reflections)...	地面の陰影を準備しています（反射なし）...
 Could not prepare No reflections (%s); the game plays as it draws itself.	反射なしを準備できませんでした（%s）。ゲーム本来の描画で遊べます。
+Close	閉じる
+Choose a driver	ドライバーを選ぶ
+Start anyway	このまま起動
+A recent Mesa Turnip package for Adreno usually fixes this: choose its .zip as the graphics driver.	Adreno向けの新しいMesa Turnipパッケージで通常は解決します。その.zipをグラフィックドライバーとして選んでください。
+FristOneRR's PanVK driver supports this Mali: download its .zip from the developer's GitHub Releases and choose it as the graphics driver.	FristOneRRのPanVKドライバーはこのMaliに対応しています。開発者のGitHub Releasesから.zipをダウンロードし、グラフィックドライバーとして選んでください。
+No replacement driver supports this GPU yet. Please report it with the log in Download (the -log-previous.txt file), so the app can be fixed for it.	このGPUに対応する代替ドライバーはまだありません。Downloadフォルダーのログ（-log-previous.txtファイル）を添えて報告してください。アプリの修正に役立ちます。
