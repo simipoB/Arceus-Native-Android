@@ -35,7 +35,7 @@ Nothing was published tonight. Built, signed with the release key (`a5f49b44…`
 |---|---|
 | Galar Native (Sword, Shield) | `simipoB/Galar-Native-Android`, `main`. Package `com.nxnative.pokemonshield` |
 | Paldea Native (Scarlet, Violet) | `simipoB/Paldea-Native-Android` (private), `main` = branch `violet` here. Package `com.nxnative.pokemonviolet` |
-| Arceus port | `simipoB/androidswithy`, branch `arceus-windows`, checkout `C:\Users\daniel\androidswithy`. **Holds the owner's own uncommitted work**: see problem 4 |
+| Arceus Native (Legends: Arceus) | Branch `arceus` of this repo (worktree `C:\Users\daniel\arceus-native`): Galar's engine, setup, menu and launcher with the Arceus profile and the Arceus work from `androidswithy` `84fb5df`. Package `com.nxnative.pokemonlegendsarceus`. See "Arceus on the Galar engine" |
 | Game profiles | Violet `dm/games/01008F6008C5E000`, Scarlet `0100A3D008C5C000`, Shield `01008DB008C2C000`, Sword `0100ABF008968000`, Arceus `01001F5010DFA000` (androidswithy) |
 | Handoff files | [docs/handoff/](handoff/): the uncommitted Arceus changes as patches, and the test scripts used tonight |
 
@@ -133,6 +133,34 @@ That checkout already had the owner's uncommitted work (touch menu, gestures, `g
 - Unimplemented stubs `nvnDeviceGetWindowOriginMode` / `nvnDeviceGetDepthMode`; `no render target could be attached` once per run.
 - Not tested: Mali / Xclipse / PanVK phones in this round (PanVK cannot run on the owner's Adreno phone), multiplayer, Bink video, long background play.
 - Sword / Shield share no game files (about 13 GB twice).
+
+## Arceus on the Galar engine (2026-11-08)
+
+Legends: Arceus is now one more profile on this tree (`dm/games/01001F5010DFA000`), built like Paldea Native: `GAME=01001F5010DFA000 bash scripts/build_apk_pc.sh`,
+or `win_build_lib.py 01001F5010DFA000` + `build_apk.py --game 01001F5010DFA000`. The app sets the game up on the phone from the player's dump (update 1.1.1), as Galar
+does; no game data ships in it. It does not touch the owner's Mac-built `com.nxnative.arceus` (another package).
+
+Taken from `androidswithy` `84fb5df` (the rest of that commit was older copies of Galar features, or is replaced by Galar's own):
+- the profile, with `app_name` / `app_repo` / `app_icon`, `android_heavy on`, `shader_nvn_capture on`; `dmsh_chain.h` regenerated (`3f2830fcd2cf` → `ba40200b20b8`: the old one would
+  have refused every pack the phone makes)
+- touch controls: the game's Back prompt, the item selector's gestures, lock-on, the throw ring, menu swipes and drag scrolling (`touch_ui.c`, `touch_menu.c`), mapped through
+  `dm_picture_box`; Galar's ☰ menu and layout editor replace the Arceus settings button
+- `DM_VK_TEXOVR` and the profile key `tex_unwritten_one` (`nvn_vk.c`): the purple-shadow test of problem 3 runs on this engine
+- Lower specs (`DM_LOWSPEC`, the POTATO mod's files in `lowspec_files.h`), in the in-game menu for Arceus only, built into the Arceus engine only
+- presses held for a number of game frames (`dm_input_press_frames`), a mouse as touch, WASD as the left stick, the emulator's fault kind without ESR (`crash.c`),
+  LSE-free NVN thunks (`elf_asm.py`)
+- split submissions stay on for Arceus (as Scarlet / Violet); no 60 fps choice (the game counts frames); no Lowest graphics (that is Sword / Shield's render scale)
+
+Left out on purpose: the Arceus render thread (off by default there; a crash entering the Fieldlands followed it; Galar's `DM_NVN_ASYNC` is the replay thread), its present path
+(FXAA / CAS through the overlay shader: Galar's scaler and SGSR present), scene FXAA, its copy of the crypto emulator (`dm/host/crypto_emu.c` is Galar's), its core pinning / hint
+threads / PC sampler (Galar's `pin_update` and hint session), its driver copy (Galar's DriverPackages), and **four performance passes, on by default there and not yet measured on
+this engine**: uniform updates deferred inside a pass (`DM_VK_UB_DEFER`), transform feedback captures batched (`DM_VK_TF_BATCH`), learnt attachment stores / `STORE_OP_NONE`
+(`DM_VK_SKIP_STORES`) and relaxed barriers between passes (`DM_VK_BARRIER`). Port them one at a time behind profile keys after measuring Arceus here with `DM_VK_PROF=1`
+(they were written for Arceus: about 59 passes and 180 captures a frame). The code is in `androidswithy` `84fb5df`, `dm/gfx/nvn/nvn_vk.c`.
+
+`dm/android/tools/lang_src.py` is behind the committed `assets/lang/*.tsv` (about 70 texts): running it would drop them. Add texts to the `.tsv` files (or bring lang_src.py up to date first).
+
+Not yet run on a phone. First test: the setup from the owner's 1.1.1 dump, then the title screen, the save, the field at 30 fps (frame-time p95 under 33.3 ms).
 
 ## Phone state left behind
 
