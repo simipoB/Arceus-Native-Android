@@ -570,7 +570,8 @@ def gfpak_members(d):
 
 def scan_blob(d, label, out):
     if d[:8] == b'GFLXPACK':
-        for i, m in gfpak_members(d): scan_blob(m, f'{label}#{i}', out)
+        for i, m in gfpak_members(d):
+            if m is not None: scan_blob(m, f'{label}#{i}', out)   # (None: the Oodle filter, DM_OODLE_FILTER, said it holds no shader: not sent over the pipe)
         return
     if d[:4] == b'Yaz0': d = yaz0(d)
     if d[:4] == b'SARC':
