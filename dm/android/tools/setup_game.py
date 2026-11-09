@@ -196,9 +196,16 @@ def main():
         if os.path.isdir(ex): shutil.rmtree(ex)
         romfs = os.path.join(ex, 'RomFS'); exefs = os.path.join(ex, 'ExeFS'); files = apks; games = [g for g in (a.games or '').split(',') if g]; aoc = None
         zs = [zipfile.ZipFile(f) for f in apks]
-        RP, PP = 'assets/game/RomFS/', 'assets/game/patched/'
-        mem = [(z, i) for z in zs for i in z.infolist() if i.filename.startswith(RP) and not i.is_dir()]
-        need = sum(i.file_size for _, i in mem) + (1 << 30); free = shutil.disk_usage(a.work).free
+        # its RomFS is in two trees: assets/game/RomFS (files kept as they are) and assets/gamez/RomFS (files that compress, in the app's block format: "NXZ1", u32 block
+        #   size, u64 size, u32 block count, u32 block offsets [count + 1] from the end of the table, then the blocks: zlib, or raw when stored at their full size;
+        #   that app's compat/apkfs.c, dm/android/tools/nxz_pack.py there). Most of the game's shader files (.bnsh, .ptcl) are in the second
+        RP, ZP, PP = 'assets/game/RomFS/', 'assets/gamez/RomFS/', 'assets/game/patched/'
+        mem = [(z, i, False) for z in zs for i in z.infolist() if i.filename.startswith(RP) and not i.is_dir()] + \
+              [(z, i, True) for z in zs for i in z.infolist() if i.filename.startswith(ZP) and not i.is_dir()]
+        def nxz_size(z, i):
+            with z.open(i) as f: h = f.read(20)
+            return struct.unpack_from('<Q', h, 8)[0] if h[:4] == b'NXZ1' else i.file_size
+        need = sum(nxz_size(z, i) if c else i.file_size for z, i, c in mem) + (1 << 30); free = shutil.disk_usage(a.work).free
         log.write(f'installed app: {len(apks)} APKs, {len(mem)} RomFS files ({need >> 20} MB with room for the shaders), {free >> 20} MB free\n')
         if not mem: raise RuntimeError('the installed app holds no game files (assets/game/RomFS)')
         if free < need: raise RuntimeError(f'not enough free storage: the setup needs about {need / (1 << 30):.1f} GB free and the phone has {free / (1 << 30):.1f} GB')
@@ -210,9 +217,19 @@ def main():
         try: os.remove(os.path.join(a.out, 'ready'))
         except FileNotFoundError: pass
         done = 0
-        for z, i in mem:
-            dst = os.path.join(romfs, i.filename[len(RP):]); os.makedirs(os.path.dirname(dst), exist_ok=True)
-            with z.open(i) as src, open(dst, 'wb') as out: shutil.copyfileobj(src, out, 1 << 22)
+        import zlib
+        for z, i, comp in mem:
+            dst = os.path.join(romfs, i.filename[len(ZP if comp else RP):]); os.makedirs(os.path.dirname(dst), exist_ok=True)
+            with z.open(i) as src, open(dst, 'wb') as out:
+                if not comp: shutil.copyfileobj(src, out, 1 << 22)
+                else:
+                    h = src.read(20)
+                    if h[:4] != b'NXZ1': raise RuntimeError(f'{i.filename} is not in the block format')
+                    bs, size, n = struct.unpack_from('<IQI', h, 4); offs = struct.unpack(f'<{n + 1}I', src.read(4 * (n + 1)))
+                    for k in range(n):
+                        blk = src.read(offs[k + 1] - offs[k]); rawn = min(bs, size - k * bs)
+                        out.write(blk if len(blk) == rawn else zlib.decompress(blk))
+                    if out.tell() != size: raise RuntimeError(f'{i.filename}: {out.tell()} bytes unpacked, not {size}')
             done += 1
             if done % 200 == 0: print(f'PROGRESS {done}/{len(mem)}', flush=True)
         step(2, ' (from the installed app)')

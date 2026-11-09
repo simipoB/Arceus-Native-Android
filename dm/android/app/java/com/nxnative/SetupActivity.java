@@ -133,7 +133,7 @@ public final class SetupActivity extends Activity {
         if (ready() && !asked && !running && notices()) asked = true;   // the last run crashed starting its graphics: this screen offers a driver instead of starting the game
         if (ready() && !asked && !running) { gameIcon(); if (!pendingWork(gameDir())) { startGame(); return; } }
         setupScreen(official);
-        if (!ready() && getIntent().getBooleanExtra("from_app", false)) startSetupFromApp();   // am start ... --ez from_app true: set up from the installed app (over adb)
+        if (getIntent().getBooleanExtra("from_app", false)) startSetupFromApp();   // am start ... --ez setup true --ez from_app true: set up (again) from the installed app, over adb
         if (ready() && !asked) startCaptures();
     }
     // The setup screen, in the launcher's look: what a player sees first after installing. Three numbered steps (game files, keys, set up), then Play once the game is
