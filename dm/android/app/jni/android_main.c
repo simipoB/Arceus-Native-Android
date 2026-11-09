@@ -457,7 +457,8 @@ static void device_profile(void) {
         const char *at = getenv("DM_AUTO_TEX"), *aa = getenv("DM_AUTO_ANISO"), *af = getenv("DM_AUTO_FPS");
         setenv("DM_GRAPHICS", ag, 0); if (at && !strcmp(at, "half")) setenv("DM_VK_TEX_QUALITY", "half", 0); if (aa) setenv("DM_VK_MAX_ANISO", aa, 0);
         if (af && atoi(af) >= 60) setenv("DM_FPS_TARGET", af, 0);   // (60 only when the app found a top phone and a display that 60 divides)
-        { const char *as = getenv("DM_AUTO_SCALER"); if (as && *as) setenv("DM_SCALER", as, 0); }   // (SGSR on a mid or top GPU, the lighter Sharp on a low one)
+        { const char *as = getenv("DM_AUTO_SCALER"); if (as && *as) setenv("DM_SCALER", as, 0); }
+        { const char *al = getenv("DM_AUTO_LOWSPEC"); if (al && *al) setenv("DM_LOWSPEC", al, 0); }   // (Legends: Arceus on a low CPU or GPU: Lower specs, android_main.c lowspec)   // (SGSR on a mid or top GPU, the lighter Sharp on a low one)
         const char *g = getenv("DM_GRAPHICS"), *tq = getenv("DM_VK_TEX_QUALITY"), *an = getenv("DM_VK_MAX_ANISO"), *ft = getenv("DM_FPS_TARGET"), *w = getenv("DM_AUTO_WHAT"), *hz = getenv("DM_DISPLAY_HZ");
         fprintf(stderr, "boot: this phone: %s (chip %s %s; display modes %s Hz): graphics %s, anisotropic filtering %sx, textures %s, frame rate %s\n", w ? w : "?", *maker ? maker : "?",
                 *model ? model : "unknown", hz ? hz : "?", g ? g : "default", an ? an : "default", tq ? tq : "full", ft ? ft : "30");
@@ -507,6 +508,18 @@ static void lowspec(void) {
 #else
 static void lowspec(void) { }
 #endif
+// "No reflections" (profile key flat_normals, the menu's DM_FLAT_NORMALS, on unless 0): the game's terrain packs with their ground and bark normal maps made flat, made by
+//   the setup from the player's own files (dm/android/tools/flat_normals.py) into <game>/flat_normals, laid over the RomFS after every mod (hle_fs.c DM_ROMFS_OVERLAY, first
+//   root wins, so a mod's own packs come first). On this engine the detail of those normal maps lit shadowed ground purple (docs/HANDOFF.md, problem 3)
+static void flat_normals(void) {
+    const char *e = getenv("DM_FLAT_NORMALS"); if (e && !strcmp(e, "0")) { fprintf(stderr, "boot: no reflections off (DM_FLAT_NORMALS=0): the ground's normal maps as the game has them\n"); return; }
+    char root[1100], done[1200]; struct stat st; snprintf(root, sizeof root, "%s/flat_normals/romfs", g_game); snprintf(done, sizeof done, "%s/flat_normals/done", g_game);
+    if (stat(root, &st) || !S_ISDIR(st.st_mode) || stat(done, &st)) return;   // (none made: not this game, or the setup has not made them yet)
+    const char *o = getenv("DM_ROMFS_OVERLAY"); char all[4096];
+    snprintf(all, sizeof all, "%s%s%s", o && *o ? o : "", o && *o ? ":" : "", root);
+    setenv("DM_ROMFS_OVERLAY", all, 1);
+    fprintf(stderr, "boot: no reflections: the flat normal maps of %s\n", root);
+}
 static pid_t g_game_tid;   // the game's main thread (performance hints below)
 static void *host_thread(void *a) {
     g_game_tid = gettid();
@@ -714,7 +727,6 @@ static void host_start(void) {
     { const char *le = getenv("DM_LAST_EXIT"); if (le && *le) fprintf(stderr, "boot: Android says the previous run ended: %s\n", le); }
     fps_guard_init();   // (before the phone profile: Graphics chosen by hand only)
     device_profile();   // the chip tier's defaults, under env.txt
-    lowspec();   // Legends: Arceus's "Lower specs" (DM_LOWSPEC): its RomFS files first in the overlay
     // Game files: inside the installed APKs (the all-in-one .apks bundle, read through apkfs.c as /nxapk/...), else copied into the files folder
     struct stat st; int inapk = !stat("/nxapk/RomFS", &st);
     snprintf(g_game, sizeof g_game, "%s", inapk ? "/nxapk" : g_files);
@@ -739,6 +751,8 @@ static void host_start(void) {
     snprintf(p, sizeof p, "%s/mods", g_files); mkdir(p, 0770);   // made by the app itself, so it can read what is put there (a folder another user made, adb's for one, it cannot)
     boot_guard(p);   // (before the mods are read: a crash with mods switches them off)
     mods_romfs(p);
+    lowspec();   // Legends: Arceus's "Lower specs" (DM_LOWSPEC): its RomFS files first in the overlay (after the mods: mods_romfs takes a set DM_ROMFS_OVERLAY for env.txt's choice)
+    flat_normals();   // Legends: Arceus's "No reflections": its flat normal maps last in the overlay, under any mod
     SETP("DM_VK_PSO_RECORD", "vk_pipelines.bin"); SETP("DM_VK_PCACHE", "vk_pipeline_cache.bin"); SETG("DM_VK_PSO_SEED", "vk_pipelines_seed.bin");
     snprintf(q, sizeof q, "%s/shaders.pak", g_game); if (!stat(q, &st)) setenv("DM_SPV_PAK", q, 0);   // the packed shader set, else vk/b-<chain>/
     { snprintf(p, sizeof p, "%s/aoc", g_game); struct stat as; if (!stat(p, &as)) setenv("DM_AOC_DIR", p, 0); }   // the DLC the player owns (Shield: the Expansion Pass keys; its content is in the update)

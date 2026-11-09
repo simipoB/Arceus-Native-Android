@@ -84,6 +84,8 @@ final class GameSettings {
     static boolean has60(Context c) { String id = game(c)[0]; return "01008DB008C2C000".equalsIgnoreCase(id) || "0100ABF008968000".equalsIgnoreCase(id) || paldea(c); }
     // Pokémon Legends: Arceus: its "Lower specs" (the POTATO mod's RomFS files, android_main.c lowspec); no 60 fps (the game counts frames: at 60 it runs fast)
     static boolean arceus(Context c) { return "01001F5010DFA000".equalsIgnoreCase(game(c)[0]); }
+    // Legends: Arceus "No reflections": the ground's normal maps made flat (setup_game.py flat_normals, android_main.c flat_normals): on unless DM_FLAT_NORMALS=0
+    static boolean flatNormals(Context c) { return arceus(c) && !"0".equals(get(c, "DM_FLAT_NORMALS")); }
     static boolean paldea(Context c) { String id = game(c)[0]; return "0100A3D008C5C000".equalsIgnoreCase(id) || "01008F6008C5E000".equalsIgnoreCase(id); }
 
     // What Auto gives this phone, from what it is rather than a list of models: { chip family, a description, graphics, textures, anisotropic filtering, frame rate, upscaler }.
@@ -119,10 +121,13 @@ final class GameSettings {
         String fps = AUTO_60 && !heavy && cpu == 2 && gpu == 2 && ram == 2 && displayDivides(c, 60) ? "60" : "30";
         String scaler = gpu >= 1 ? "sgsr" : "sharp";
         String shadows = "";   // (2K shadow maps: removed from Auto and the menu at the owner's request; DM_SHADOWS=2k in env.txt still applies them, for testing)   // (SGSR's extra passes on a GPU with room for them; the cheaper Sharp on a low one)
+        // Legends: Arceus' Lower specs (android_main.c lowspec: the POTATO mod's shorter draw distance and lighter shadows) on a phone with a low CPU or GPU, where its
+        // handheld mode alone does not hold 30; never Lowest (no shadows) by itself
+        String lowspec = arceus(c) && (cpu == 0 || gpu == 0) ? "1" : "";
         String[] t = { "low", "mid", "top" };
         String what = String.format(java.util.Locale.ROOT, "%s CPU%s, %s GPU, %s memory (%.0f GB), display up to %.0f Hz", t[cpu], khz > 0 ? String.format(java.util.Locale.ROOT, " %.1f GHz", khz / 1e6) : "",
                                     t[gpu], t[ram], Math.ceil(gb), maxRefresh(c));
-        return new String[] { n, what, gfx, tex, aniso, fps, scaler, shadows };
+        return new String[] { n, what, gfx, tex, aniso, fps, scaler, shadows, lowspec };
     }
     // the fastest core's top clock in kHz (cpu*/cpufreq/cpuinfo_max_freq), 0 when unreadable
     static long maxCpuKhz() {

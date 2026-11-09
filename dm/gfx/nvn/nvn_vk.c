@@ -838,7 +838,7 @@ void mtl_alias_drop_pool(const void *pool);   // textures (section below)
 // A submission (mtl_sub_begin … mtl_sub_commit) records into its main command buffer; texture uploads and the first-use setup of new images go into its upload command buffer,
 // submitted just before it. CPU-visible effects (event writes, counter reports) are collected and applied by the completion thread when the GPU has finished the submission,
 // in submission order, before the fence value is published (games wait on either)
-typedef struct { int kind; volatile uint32_t *val; uint32_t mode, v; uint64_t addr; uint32_t type; } post_op;
+typedef struct { int kind; volatile uint32_t *val; uint32_t mode, v; uint64_t addr; uint32_t type; uint32_t q; } post_op;   // (q: the report's GPU timestamp query + 1, report_ts)
 typedef struct { VkBuffer buf; vmalloc_t a; uint8_t *map; VkDeviceSize used, size; } arena_blk;
 typedef struct {
     VkCommandPool pool; VkCommandBuffer cb, ucb; int ucb_open; uint64_t fence;
@@ -847,6 +847,7 @@ typedef struct {
     wb_t *wb; int nwb, cwb;        // mirrored pools: ranges the GPU writes in this submission (copied back to the game's pages at completion)
     VkDescriptorPool *dp; int ndp, cdp;   // g_nopush: this submission's descriptor pools (dp[cdp] in use), reset when it is reused
     uint64_t frame;                 // the frame it belongs to (GPU time per frame, mtl_gpu_ms)
+    uint32_t nrq, rq_pend;           // report_ts: timestamp queries used by its counter reports, and how many wait for the open pass to end
 } sub_t;
 #define NSUB 6
 static sub_t g_subs[NSUB]; static sub_t *g_sub; static int g_sub_next;
@@ -864,6 +865,35 @@ static pthread_t g_sub_thread; static _Atomic int g_sub_thread_set;
 static int on_sub_thread(void) { return atomic_load(&g_sub_thread_set) && pthread_equal(pthread_self(), g_sub_thread); }
 
 static uint64_t gpu_ticks(void) { uint64_t g = guest_ns(); if (!g) g = mono_ns(); return g * 12 / 625; }
+// Counter reports with the GPU's own time (DM_VK_REPORT_TS=0: off). A report's timestamp is when the GPU reached it: Game Freak's engines time their GPU work by the
+//   reports around it and lower their own 3D render scale when it runs long (Legends: Arceus main+0xcc35a4: GPU time / 33.3 ms, at 95 % one step lighter, up to 0.8 x 0.7;
+//   Sword / Shield main+0xf6acb0, 0.8). Every report used to get the CPU's time when the whole submission was seen complete (post_apply), so two reports in one
+//   submission were nearly equal, the game saw no GPU time and never lowered its scale. Now each report writes a Vulkan timestamp query where it is recorded, and one more
+//   ends the submission (RQ_END); at completion a report's time is the completion time less the GPU time from it to the end, on the guest's 19.2 MHz clock. Differences
+//   within a submission are the GPU's own; between submissions the anchor is the completion thread's wake-up (sub-millisecond). On tilers a timestamp inside a render
+//   pass can take the pass out of tile memory (Adreno), so one recorded in an open pass is written as that pass ends (report_ts_flush): never inside a pass
+enum { RQ_PER = 64, RQ_END = RQ_PER - 1 };   // queries per submission slot; the last one ends the submission
+static VkQueryPool g_rtq; static double g_rtper; static uint64_t g_rt_last;   // (g_rt_last: reports never go back in time)
+static void report_ts_init(void) {
+    const char *e = getenv("DM_VK_REPORT_TS"); if (e && !strcmp(e, "0")) { VLOG("counter reports: CPU time at completion (DM_VK_REPORT_TS=0)"); return; }
+    uint32_t nq = 0; vkGetPhysicalDeviceQueueFamilyProperties(g_pd, &nq, NULL); VkQueueFamilyProperties qp[16]; if (nq > 16) nq = 16; vkGetPhysicalDeviceQueueFamilyProperties(g_pd, &nq, qp);
+    if (g_qf >= nq || qp[g_qf].timestampValidBits < 48 || !(g_props.limits.timestampPeriod > 0)) { VLOG("counter reports: CPU time at completion (the queue has no usable timestamps)"); return; }
+    VkQueryPoolCreateInfo qi = { .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = RQ_PER * NSUB };
+    if (vkCreateQueryPool(g_dev, &qi, NULL, &g_rtq)) { g_rtq = VK_NULL_HANDLE; return; }
+    g_rtper = g_props.limits.timestampPeriod; VLOG("counter reports: the GPU's own timestamps (%.2f ns a tick), written between passes", g_rtper);
+}
+static void report_ts_flush(VkCommandBuffer cb, sub_t *s) {   // outside any pass: the timestamps of the reports recorded in the pass that just ended
+    for (; s->rq_pend; s->rq_pend--) vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g_rtq, (uint32_t)(s - g_subs) * RQ_PER + s->nrq - s->rq_pend);
+}
+static uint64_t report_time(sub_t *s, uint32_t q, uint64_t now_ticks) {   // a report's time (19.2 MHz ticks) from its query and the submission's end
+    uint64_t t[2]; uint32_t base = (uint32_t)(s - g_subs) * RQ_PER;
+    if (vkGetQueryPoolResults(g_dev, g_rtq, base + q - 1, 1, 8, &t[0], 8, VK_QUERY_RESULT_64_BIT) != VK_SUCCESS ||
+        vkGetQueryPoolResults(g_dev, g_rtq, base + RQ_END, 1, 8, &t[1], 8, VK_QUERY_RESULT_64_BIT) != VK_SUCCESS || t[1] < t[0]) return now_ticks;
+    uint64_t back = (uint64_t)((double)(t[1] - t[0]) * g_rtper * 12.0 / 625.0);   // ns → 19.2 MHz ticks
+    uint64_t r = back < now_ticks ? now_ticks - back : now_ticks;
+    if (r < g_rt_last) r = g_rt_last; g_rt_last = r;
+    return r;
+}
 static void wb_apply(sub_t *s) {
     for (int i = 0; i < s->nwb; i++) {
         pthread_mutex_lock(&g_mu); int k = pool_find(s->wb[i].addr, s->wb[i].n); pool_ent e = k >= 0 ? g_pools[k] : (pool_ent){0}; pthread_mutex_unlock(&g_mu);
@@ -879,7 +909,8 @@ static void post_apply(sub_t *s) {
         post_op *o = &s->post[i];
         if (o->kind == 1) { if (o->mode == 1) *o->val += o->v; else *o->val = o->v; }
         else {   // counter report {value, timestamp}: timestamps on the guest's 19.2 MHz clock; occlusion counts are not measured yet (reported as visible)
-            uint64_t t = gpu_ticks(), rec[2] = { o->type == NVN_COUNTER_TYPE_SAMPLES_PASSED ? 0xffffu : (o->type == 0 || o->type == 0x10) && !DM_GAME_RENDER_COND ? t : 0, t };
+            uint64_t t = gpu_ticks(); if (o->q && g_rtq) t = report_time(s, o->q, t); else if (t < g_rt_last) t = g_rt_last;   // (report_ts)
+            uint64_t rec[2] = { o->type == NVN_COUNTER_TYPE_SAMPLES_PASSED ? 0xffffu : (o->type == 0 || o->type == 0x10) && !DM_GAME_RENDER_COND ? t : 0, t };
             memcpy((void *)o->addr, rec, sizeof rec);
         }
     }
@@ -930,6 +961,7 @@ static void completion_start(void) {
         if (g_qf < nq && qp[g_qf].timestampValidBits && g_props.limits.timestampPeriod > 0 && getenv("DM_VK_GPU_TIME") && atoi(getenv("DM_VK_GPU_TIME"))) {   // on request only (DM_VK_GPU_TIME=1): timestamps may cost on tilers
             VkQueryPoolCreateInfo qi = { .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = 2 * NSUB };
             if (vkCreateQueryPool(g_dev, &qi, NULL, &g_tsq)) g_tsq = VK_NULL_HANDLE; g_tsper = g_props.limits.timestampPeriod; } }
+    report_ts_init();
     pthread_t t; pthread_create(&t, NULL, completion_main, NULL); pthread_detach(t);
 }
 uint64_t mtl_last_fence(void) { return g_fence; }
@@ -990,6 +1022,7 @@ void mtl_sub_begin(void) {
     s->npost = 0; s->ucb_open = 0;
     VkCommandBufferBeginInfo bi = { .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT };
     VKCHECK(vkBeginCommandBuffer(s->cb, &bi));
+    s->nrq = 0; s->rq_pend = 0; if (g_rtq) vkCmdResetQueryPool(s->cb, g_rtq, (uint32_t)(s - g_subs) * RQ_PER, RQ_PER);
     if (g_tsq) { int i = (int)(s - g_subs); s->frame = g_frame_no; unsigned k = s->frame % GRING;
         if (atomic_load(&g_gpu[k].frame) != s->frame) { atomic_store(&g_gpu[k].ns, 0); atomic_store(&g_gpu[k].pending, 0); atomic_store(&g_gpu[k].frame, s->frame); }
         atomic_fetch_add(&g_gpu[k].pending, 1);
@@ -1194,6 +1227,7 @@ uint64_t mtl_sub_commit(void) {
     pass_end();
     shadow_sync_ordered(s);   // (into the upload command buffer, which runs before this submission's work)
     if (g_tsq) vkCmdWriteTimestamp(s->cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g_tsq, (uint32_t)(s - g_subs) * 2 + 1);
+    if (g_rtq) { report_ts_flush(s->cb, s); vkCmdWriteTimestamp(s->cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g_rtq, (uint32_t)(s - g_subs) * RQ_PER + RQ_END); }
     barrier_host(s->cb);
     VKCHECK(vkEndCommandBuffer(s->cb));
     VkCommandBuffer cbs[2]; uint32_t n = 0;
@@ -2297,7 +2331,7 @@ static void cap_present(uint64_t n) {
     if (st == 2) { atomic_store(&g_cap, 3); return; }
     if (st == 3) { pthread_mutex_lock(&g_qmu); vkDeviceWaitIdle(g_dev); pthread_mutex_unlock(&g_qmu); cap_write(); atomic_store(&g_cap, 0); }
 }
-static void pass_end(void) { if (P.open) { rend_end(CB()); P.open = 0; if (atomic_load(&g_cap) == 2) cap_pass(); } }
+static void pass_end(void) { if (P.open) { rend_end(CB()); P.open = 0; if (g_rtq && g_sub && g_sub->rq_pend) report_ts_flush(CB(), g_sub); if (atomic_load(&g_cap) == 2) cap_pass(); } }
 static int rt_dup_slot(const p_set_rt *r, int i) {
     if (!r->color[i]) return 0;
     uint8_t lv = r->has_cview[i] && r->cview[i].set_levels ? r->cview[i].base_level : 0; uint16_t ly = r->has_cview[i] && r->cview[i].set_layers ? r->cview[i].min_layer : 0;
@@ -3412,7 +3446,12 @@ void mtl_exec(const uint8_t *p) {
             case OP_JUMP: memcpy(&p, a, 8); continue;
             case OP_CALL: { const uint8_t *t; memcpy(&t, a, 8); mtl_exec(t); break; }
             case OP_SIGNAL_EVENT: { volatile uint32_t *val; uint32_t m, v; memcpy(&val, a, 8); memcpy(&m, a + 8, 4); memcpy(&v, a + 12, 4); post((post_op){1, val, m, v, 0, 0}); break; }
-            case OP_REPORT_COUNTER: { uint64_t t, ad; memcpy(&t, a, 8); memcpy(&ad, a + 8, 8); post((post_op){2, NULL, 0, 0, ad, (uint32_t)t}); break; }
+            case OP_REPORT_COUNTER: { uint64_t t, ad; memcpy(&t, a, 8); memcpy(&ad, a + 8, 8); uint32_t q = 0;
+                if (g_rtq && g_sub && g_sub->nrq < RQ_END) {   // its GPU timestamp (report_ts): now outside a pass, else when the open pass ends
+                    q = ++g_sub->nrq;
+                    if (P.open) g_sub->rq_pend++; else vkCmdWriteTimestamp(CB(), VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g_rtq, (uint32_t)(g_sub - g_subs) * RQ_PER + q - 1);
+                }
+                post((post_op){2, NULL, 0, 0, ad, (uint32_t)t, q}); break; }
             case OP_RESET_COUNTER: case OP_RENDER_COND: break;
             case OP_FENCE_SYNC: { sync_t *s; memcpy(&s, a, 8); s->fence = g_fence + 1; s->fenced = 2; break; }   // (2: fenced inside a command list, DM_VK_PROF tells them apart)
             case OP_CLEAR_BUF: { const p_clear_buf *cb = (const p_clear_buf *)a; mtl_sub_fill(cb->addr, cb->size, cb->value); break; }

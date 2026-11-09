@@ -268,3 +268,8 @@ Lower specs	Requisitos menores
 Off: the world as the game draws it	No: el mundo como lo dibuja el juego
 On: shorter draw distance for Pokémon, people and trees, lighter shadows	Sí: menor distancia de dibujado para Pokémon, personas y árboles, sombras más ligeras
 Lowest: shorter draw distance and no shadows	Mínimo: menor distancia de dibujado y sin sombras
+No reflections	Sin reflejos
+On: smooth ground lighting, no purple shadows	Sí: iluminación suave del suelo, sin sombras moradas
+Off: the ground's full lighting detail (purple shadows in places)	No: todo el detalle de iluminación del suelo (sombras moradas en algunos sitios)
+Preparing the ground's lighting (No reflections)...	Preparando la iluminación del suelo (Sin reflejos)...
+Could not prepare No reflections (%s); the game plays as it draws itself.	No se pudo preparar Sin reflejos (%s); el juego se ve como lo dibuja él mismo.

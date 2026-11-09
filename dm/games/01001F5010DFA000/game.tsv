@@ -75,3 +75,10 @@ touch_menu_popups	0x416ece8
 android_op_mode	handheld
 # heavier than the Sword / Shield the Auto tiers were set on (about 20 fps docked on a Galaxy S25+): Auto picks one tier lower (GameSettings.profile)
 android_heavy	on
+
+# ---- No reflections (Android: the in-game menu, on by default; android_main.c flat_normals, dm/android/tools/flat_normals.py) ----
+# On this engine the fine lighting detail of the field's ground and tree bark shows purple in shadowed places. The setup makes the normal maps below flat in the
+# player's own terrain packs (every BC5 block R 133 G 124, as the community's no_reflections mod) and the engine lays them over the RomFS. The set is that mod's:
+# every ground material (ha_*) but ice, and the bark of these trees; grass, flowers, shrubs and leaves keep their detail
+flat_normals	bin/archive/field/terrain
+flat_normals_names	ha_*_nrm,!ha_area05_ice_nrm,area00_glass01_nrm,plants_area01_tree01_02_nrm,plants_area01_tree02_02_nrm,plants_area02_tree01_02_nrm,plants_area02_tree03_nrm,plants_area02_tree04_nrm,plants_area02_tree05_nrm,plants_area02_tree06_02_nrm,plants_area02_tree07_nrm,plants_area02_tree10_01_nrm,plants_area02_tree11_01_nrm,plants_area03_tree02_nrm,plants_area03_tree03_nrm,plants_area03_tree05_nrm,plants_area03_tree06_nrm,plants_area04_tree01_02_nrm,plants_tree01_02_nrm,plants_tree02_nrm,plants_tree04_02_nrm

@@ -721,11 +721,21 @@ public final class SetupActivity extends Activity {
             String s = f.getPath().substring(cut) + "|" + f.length() + "|" + f.lastModified(); for (int i = 0; i < s.length(); i++) fp[0] = (fp[0] ^ s.charAt(i)) * 1099511628211L; }
     }
     private void startModShaders() {
-        String[] st = modShaderState(gameDir()); if (st == null) { startGame(); return; }
+        String[] st = modShaderState(gameDir()); if (st == null) { startFlatNormals(); return; }
         bar.setMax(300); bar.setProgress(0); status.setText(T.t(this, "Reading the shaders of your mods..."));
         runSetup(new ArrayList<>(Arrays.asList("--mod-shaders", st[0])), err -> {
             try (FileWriter w = new FileWriter(new File(gameDir(), "mod_shaders_done"))) { w.write(st[1] + "\n"); } catch (IOException e) { }   // (also after a failure: not tried again each start)
             if (err != null) Toast.makeText(this, T.t(this, "Could not add your mods' shaders (%s); the game still plays, some mod effects may not show.", err), Toast.LENGTH_LONG).show();
+            startFlatNormals();
+        });
+    }
+    // Legends: Arceus "No reflections" (on unless the player turned it off: GameSettings.flatNormals): the flat normal maps made once from the player's own packs
+    // (setup_game.py --flat-normals, about a minute), for a game set up before they existed; a new setup makes them itself. A failure is said and the game plays as drawn
+    private void startFlatNormals() {
+        if (!GameSettings.flatNormals(this) || new File(new File(gameDir(), "flat_normals"), "done").exists()) { startGame(); return; }
+        bar.setMax(100); bar.setProgress(0); status.setText(T.t(this, "Preparing the ground's lighting (No reflections)..."));
+        runSetup(new ArrayList<>(Arrays.asList("--flat-normals")), err -> {
+            if (err != null) Toast.makeText(this, T.t(this, "Could not prepare No reflections (%s); the game plays as it draws itself.", err), Toast.LENGTH_LONG).show();
             startGame();
         });
     }

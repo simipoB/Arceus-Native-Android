@@ -268,3 +268,8 @@ Lower specs	Configuration allégée
 Off: the world as the game draws it	Non : le monde tel que le jeu le dessine
 On: shorter draw distance for Pokémon, people and trees, lighter shadows	Oui : distance d'affichage réduite pour les Pokémon, les gens et les arbres, ombres allégées
 Lowest: shorter draw distance and no shadows	Minimal : distance d'affichage réduite et pas d'ombres
+No reflections	Sans reflets
+On: smooth ground lighting, no purple shadows	Oui : éclairage du sol lissé, sans ombres violettes
+Off: the ground's full lighting detail (purple shadows in places)	Non : tout le détail d'éclairage du sol (ombres violettes par endroits)
+Preparing the ground's lighting (No reflections)...	Préparation de l'éclairage du sol (Sans reflets)...
+Could not prepare No reflections (%s); the game plays as it draws itself.	Impossible de préparer Sans reflets (%s) ; le jeu s'affiche tel qu'il se dessine.

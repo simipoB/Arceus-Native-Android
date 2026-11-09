@@ -95,9 +95,11 @@ def main():
     ap.add_argument('--allow-damaged', action='store_true', help='the unpacker writes files that fail their hash check as read (the setup screen: Set up anyway)')
     ap.add_argument('--live', help='with --captures, while the game runs: the translated shaders also go into this folder for the engine to load at once (nvn_vk.c live_check)')
     ap.add_argument('--mod-shaders', help="the RomFS folders of the mods that are on, ':'-separated: their new shaders translated into the pack")
+    ap.add_argument('--flat-normals', action='store_true', help='only make the profile\'s flat normal maps (flat_normals: Legends: Arceus "No reflections") for the game set up in --out')
     ap.add_argument('--resume', action='store_true', help='go on from the shader translation when an earlier run of this setup got that far (resume.json in --work)')
     a = ap.parse_args()
     if a.mod_shaders is not None: return mod_shaders(a)
+    if a.flat_normals: return flat_normals(a)
     if a.games and not a.root: ap.error('--games needs --root')
     if a.captures:
         if a.live: live_yield()
@@ -325,10 +327,32 @@ def main():
     # the new pack holds every capture there is, so the launcher's list of captures already added is stale: the next start checks them against the pack again
     try: os.remove(os.path.join(a.out, 'captures_done'))
     except FileNotFoundError: pass
+    if PROFILE.get('flat_normals', ''):   # (Legends: Arceus: No reflections, from the packs just set up; a failure leaves the game playable as the game draws it)
+        try: flat_normals(a, log)
+        except Exception as e: log.write(f'flat normals: {e}\n')
     open(os.path.join(a.out, 'ready'), 'w').write(chain + '\n')
     try: os.remove(state)
     except FileNotFoundError: pass
     print('DONE', flush=True)
+
+def flat_normals(a, log=None):
+    """The profile's flat normal maps (flat_normals: the RomFS folder of the packs, flat_normals_names: the textures) into <out>/flat_normals, from the game's own packs in
+    <out>/RomFS, decoded with the game's own Oodle decoder (dmoodle and the rewritten modules of this setup). The engine lays the folder over the RomFS while the
+    setting is on (android_main.c flat_normals). <out>/flat_normals/done holds the profile's names, so a changed list makes them again (SetupActivity)"""
+    folder, names = PROFILE.get('flat_normals', ''), PROFILE.get('flat_normals_names', '')
+    if not folder: return
+    own = log is None
+    if own: os.makedirs(a.work, exist_ok=True); log = open(os.path.join(a.work, 'setup.log'), 'a', buffering=1)
+    dst = os.path.join(a.out, 'flat_normals'); dmo = os.path.join(a.bin, 'dmoodle')
+    if not os.path.isfile(dmo): raise RuntimeError(f'{NAME} needs the dmoodle tool for its flat normal maps, which this app build does not have')
+    if own: print('STEP 1/1 flat normal maps', flush=True)
+    cmd = [sys.executable, os.path.join(DM, 'android/tools/flat_normals.py'), '--romfs', os.path.join(a.out, 'RomFS'), '--out', dst, '--folder', folder, '--names', names,
+           '--oodle', dmo, '--modules', os.path.join(a.out, 'patched')]
+    log.write('$ ' + ' '.join(cmd) + '\n')
+    r = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, env=dict(os.environ, PYTHONUNBUFFERED='1'))
+    if r.returncode: raise RuntimeError(f'flat_normals.py failed ({r.returncode}); see {log.name}')
+    open(os.path.join(dst, 'done'), 'w').write(names + '\n')
+    if own: print('DONE', flush=True)
 
 def pak_keys(path):   # the keys an NXSP shader pack holds, and its chain version
     with open(path, 'rb') as f:

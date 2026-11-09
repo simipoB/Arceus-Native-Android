@@ -253,7 +253,11 @@ public final class GameMenu {
             { "lowest", t(a, "Lowest"), t(a, "Lowest: handheld mode, 3D at 960x540, coolest") } };
         choice(a, "DM_GRAPHICS", t(a, "Graphics"), GameSettings.paldea(a) || GameSettings.arceus(a) ? java.util.Arrays.copyOf(gfx, 4) : gfx);   // (Lowest: Sword / Shield's render scale only)
         // Legends: Arceus: the POTATO mod's draw distance and shadows (android_main.c lowspec, DM_LOWSPEC 1 / 2), for phones that cannot hold its frame rate
-        if (GameSettings.arceus(a)) choice(a, "DM_LOWSPEC", t(a, "Lower specs"), new String[][] { { "", t(a, "Off"), t(a, "Off: the world as the game draws it") },
+        // Legends: Arceus: flat normal maps on the field's ground and tree bark (setup_game.py flat_normals): on this engine their detail lights shadowed ground purple
+        if (GameSettings.arceus(a)) choice(a, "DM_FLAT_NORMALS", t(a, "No reflections"), new String[][] { { "", t(a, "On"), t(a, "On: smooth ground lighting, no purple shadows") },
+            { "0", t(a, "Off"), t(a, "Off: the ground's full lighting detail (purple shadows in places)") } });
+        if (GameSettings.arceus(a)) choice(a, "DM_LOWSPEC", t(a, "Lower specs"), new String[][] { { "", t(a, "Auto"), t(a, "Auto: this phone gets %s", t(a, p[8].isEmpty() ? "Off" : "On")) },
+            { "0", t(a, "Off"), t(a, "Off: the world as the game draws it") },
             { "1", t(a, "On"), t(a, "On: shorter draw distance for Pokémon, people and trees, lighter shadows") }, { "2", t(a, "Lowest"), t(a, "Lowest: shorter draw distance and no shadows") } });
         if (GameSettings.has60(a)) choice(a, "DM_FPS_TARGET", t(a, "Frame rate"), new String[][] { { "", t(a, "Auto"), t(a, "Auto: this phone gets %s fps", p[5]) },
             { "30", "30 fps", t(a, "30 fps, as the game is made") }, { "60", "60 fps", GameSettings.paldea(a) ? t(a, "Up to 60 fps: faster where the phone can, game speed stays right (Fl4sh's Dynamic FPS mod)")
