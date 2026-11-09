@@ -77,6 +77,12 @@ final class GameSettings {
         try (BufferedReader r = new BufferedReader(new InputStreamReader(c.getAssets().open("app"), "UTF-8"))) { String[] a = r.readLine().split("\t"); if (a.length >= 2) return a; } catch (Exception e) { }
         return new String[] { "Galar Native", "github.com/simipoB/Galar-Native-Android" };
     }
+    // the installed app the chosen game can be set up from instead of a dump (assets/setup_from, the profile's setup_from_app: the PC-built Legends: Arceus app), else null
+    static String setupFromApp(Context c) {
+        try (BufferedReader r = new BufferedReader(new InputStreamReader(c.getAssets().open("setup_from"), "UTF-8"))) {
+            String l, id = game(c)[0]; while ((l = r.readLine()) != null) { String[] a = l.split("\t"); if (a.length >= 2 && a[0].equalsIgnoreCase(id)) return a[1]; } } catch (Exception e) { }
+        return null;
+    }
     static boolean isShield(Context c) { return "01008DB008C2C000".equalsIgnoreCase(game(c)[0]); }
     // the games the built-in 60 fps patch knows (loader.c FPS_SITES: Pokémon Shield and Sword 1.3.2)
     // the frame-rate setting: Sword / Shield 1.3.2 (loader.c fps_patch), Scarlet / Violet 4.0.0 (loader.c's built-in Dynamic FPS mod)

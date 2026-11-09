@@ -76,6 +76,11 @@ android_op_mode	handheld
 # heavier than the Sword / Shield the Auto tiers were set on (about 20 fps docked on a Galaxy S25+): Auto picks one tier lower (GameSettings.profile)
 android_heavy	on
 
+# ---- Set up from an installed app (Android) ----
+# The Legends: Arceus app built on a PC (Mac pipeline) holds the game in its APKs (assets/game: RomFS and the code this repository's patch_nso.py rewrote): the setup screen
+# offers it in place of a dump (setup_game.py --installed); only the shaders are made again (that app's pack is another translation chain)
+setup_from_app	com.nxnative.arceus
+
 # ---- No reflections (Android: the in-game menu, on by default; android_main.c flat_normals, dm/android/tools/flat_normals.py) ----
 # On this engine the fine lighting detail of the field's ground and tree bark shows purple in shadowed places. The setup makes the normal maps below flat in the
 # player's own terrain packs (every BC5 block R 133 G 124, as the community's no_reflections mod) and the engine lays them over the RomFS. The set is that mod's:

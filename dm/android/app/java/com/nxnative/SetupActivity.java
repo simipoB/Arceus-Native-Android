@@ -133,6 +133,7 @@ public final class SetupActivity extends Activity {
         if (ready() && !asked && !running && notices()) asked = true;   // the last run crashed starting its graphics: this screen offers a driver instead of starting the game
         if (ready() && !asked && !running) { gameIcon(); if (!pendingWork(gameDir())) { startGame(); return; } }
         setupScreen(official);
+        if (!ready() && getIntent().getBooleanExtra("from_app", false)) startSetupFromApp();   // am start ... --ez from_app true: set up from the installed app (over adb)
         if (ready() && !asked) startCaptures();
     }
     // The setup screen, in the launcher's look: what a player sees first after installing. Three numbered steps (game files, keys, set up), then Play once the game is
@@ -166,6 +167,9 @@ public final class SetupActivity extends Activity {
         text(c1, T.t(this, "The base game (.nsp or .xci), the %s update and any DLC. You can choose them all at once.", GameSettings.version(this)), 13, 0xFFA9AFBA, false);
         gameText = text(c1, "", 14, 0xFFF2F3F5, false); gameText.setPadding(0, px(8), 0, px(8));
         LinearLayout r1 = hrow(c1); pill(r1, T.t(this, "Choose game files"), acc, 0xFFFFFFFF, v -> pick(PICK_GAME, true));
+        if (installedApp() != null) {   // the game already on the phone in another app (the PC-built Legends: Arceus app): no dump or keys needed
+            text(c1, T.t(this, "Or use the game from the %s app already on this phone (no dump or keys needed):", gameName()), 13, 0xFFA9AFBA, false);
+            pill(hrow(c1), T.t(this, "Set up from the installed app"), acc, 0xFFFFFFFF, v -> startSetupFromApp()); }
         clear = pill(r1, T.t(this, "Clear"), 0xFF2A2E37, 0xFFC4C9D2, v -> clearGames());
         LinearLayout c2 = card(root, "2", T.t(this, "Your keys"), acc);
         text(c2, T.t(this, "prod.keys from your own Switch (and title.keys if your dump needs it)."), 13, 0xFFA9AFBA, false);
@@ -678,6 +682,18 @@ public final class SetupActivity extends Activity {
         if (base == null && upd != null) { base = upd; upd = null; }   // (only an update chosen, or an update holding the base game: the unpacker says which it is)
         if (base == null && !dlc.isEmpty()) base = dlc.remove(0);
         List<String> a = new ArrayList<>(); a.add(base); a.add(upd); a.addAll(dlc); return a.toArray(new String[0]);
+    }
+    // the folder of the installed app's APKs (base and splits) that holds this game (GameSettings.setupFromApp), or null
+    private String installedApp() {
+        String pkg = GameSettings.setupFromApp(this); if (pkg == null) return null;
+        try { android.content.pm.ApplicationInfo ai = getPackageManager().getApplicationInfo(pkg, 0);
+            File d = new File(ai.sourceDir).getParentFile(); return d != null && new File(ai.sourceDir).canRead() ? d.getPath() : null; }
+        catch (Exception e) { return null; }
+    }
+    private void startSetupFromApp() {
+        String dir = installedApp(); if (running || dir == null) return;
+        bar.setMax(600); bar.setProgress(0); status.setText(T.t(this, "Preparing..."));
+        resumes = 0; workerCap = 0; runFullSetup(new ArrayList<>(Arrays.asList("--installed", dir)));
     }
     private void startSetup(boolean allowDamaged) {
         if (running || games.isEmpty()) return;

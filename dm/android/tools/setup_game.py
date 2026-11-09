@@ -120,6 +120,7 @@ def main():
     ap.add_argument('--allow-damaged', action='store_true', help='the unpacker writes files that fail their hash check as read (the setup screen: Set up anyway)')
     ap.add_argument('--live', help='with --captures, while the game runs: the translated shaders also go into this folder for the engine to load at once (nvn_vk.c live_check)')
     ap.add_argument('--mod-shaders', help="the RomFS folders of the mods that are on, ':'-separated: their new shaders translated into the pack")
+    ap.add_argument('--installed', help='the folder of an installed app\'s APKs that already hold this game (assets/game: RomFS and the rewritten code; the Legends: Arceus app built on a PC): set up from them instead of a dump')
     ap.add_argument('--flat-normals', action='store_true', help='only make the profile\'s flat normal maps (flat_normals: Legends: Arceus "No reflections") for the game set up in --out')
     ap.add_argument('--resume', action='store_true', help='go on from the shader translation when an earlier run of this setup got that far (resume.json in --work)')
     a = ap.parse_args()
@@ -129,7 +130,7 @@ def main():
     if a.captures:
         if a.live: live_yield()
         return captures(a)
-    if not (a.keys and a.base): ap.error('--keys and --base are needed (or --captures)')
+    if not (a.installed or (a.keys and a.base)): ap.error('--keys and --base are needed (or --installed, or --captures)')
     os.makedirs(a.work, exist_ok=True); os.makedirs(a.out, exist_ok=True)
     log = open(os.path.join(a.work, 'setup.log'), 'a', buffering=1)
     py = sys.executable; env = dict(os.environ, PYTHONUNBUFFERED='1')
@@ -169,13 +170,13 @@ def main():
         stop5 = threading.Event(); threading.Thread(target=watch_files, args=(vk, '.vkr', max(nspv, 1), stop5), daemon=True).start()
         try: run([py, os.path.join(DM, 'android/tools/vk_meta.py'), built, vk, built])
         finally: stop5.set()
-    keys = os.path.join(a.keys, 'prod.keys')
-    if not os.path.isfile(keys): raise RuntimeError(f'no prod.keys in {a.keys}')
+    keys = os.path.join(a.keys or '', 'prod.keys')
+    if not a.installed and not os.path.isfile(keys): raise RuntimeError(f'no prod.keys in {a.keys}')
     ex = os.path.join(a.work, 'extract')
 
     # --resume (the setup screen, after Android stopped this setup, #51 / #52: exit 137 during the shader translation): resume.json, written once the shader scan is done,
     #   says what steps 1-3 found; the unpacked game, the rewritten code and the scanned shaders are still in place, and the translation goes on from what it had done
-    state = os.path.join(a.work, 'resume.json'); resumed = False
+    state = os.path.join(a.work, 'resume.json'); resumed = False; from_app = False
     if a.resume and os.path.isfile(state) and os.path.isfile(os.path.join(ex, 'ExeFS', 'main')) and os.path.isdir(os.path.join(a.work, 'shader_pkg')):
         import json
         st = json.load(open(state, encoding='utf-8'))
@@ -185,7 +186,53 @@ def main():
             print(f'GAME {st["game"].upper()}', flush=True)
         exefs, romfs, pkg, pat = os.path.join(ex, 'ExeFS'), os.path.join(ex, 'RomFS'), os.path.join(a.work, 'shader_pkg'), os.path.join(a.out, 'patched')
         resumed = True; log.write(f'== {time.strftime("%H:%M:%S")} resumed after a stop: steps 1-3 kept, the translation goes on\n')
-    if not resumed:
+    if not resumed and a.installed:
+        # --installed: the game from an app that already holds it (the Legends: Arceus app built on a PC: its APKs carry assets/game/RomFS and assets/game/patched, the code
+        #   rewritten by this same patch_nso.py). Steps 1 and 2 take them from there; the shaders are scanned and translated as for a dump (the old app's pack is another chain)
+        import zipfile
+        step(1, ' (from the installed app)')
+        apks = sorted(os.path.join(a.installed, f) for f in os.listdir(a.installed) if f.endswith('.apk'))
+        if not apks: raise RuntimeError(f'no APKs in {a.installed}')
+        if os.path.isdir(ex): shutil.rmtree(ex)
+        romfs = os.path.join(ex, 'RomFS'); exefs = os.path.join(ex, 'ExeFS'); files = apks; games = [g for g in (a.games or '').split(',') if g]; aoc = None
+        zs = [zipfile.ZipFile(f) for f in apks]
+        RP, PP = 'assets/game/RomFS/', 'assets/game/patched/'
+        mem = [(z, i) for z in zs for i in z.infolist() if i.filename.startswith(RP) and not i.is_dir()]
+        need = sum(i.file_size for _, i in mem) + (1 << 30); free = shutil.disk_usage(a.work).free
+        log.write(f'installed app: {len(apks)} APKs, {len(mem)} RomFS files ({need >> 20} MB with room for the shaders), {free >> 20} MB free\n')
+        if not mem: raise RuntimeError('the installed app holds no game files (assets/game/RomFS)')
+        if free < need: raise RuntimeError(f'not enough free storage: the setup needs about {need / (1 << 30):.1f} GB free and the phone has {free / (1 << 30):.1f} GB')
+        cuts = next((z.read(PP + 'main.cuts.tsv').decode() for z in zs if PP + 'main.cuts.tsv' in z.namelist()), '')
+        build_id = next((l.split('\t')[1].strip() for l in cuts.splitlines() if l.startswith('# BUILD_ID')), '')
+        builds = PROFILE.builds()
+        if build_id not in {b.get('main') for b in builds.values()}:
+            raise RuntimeError(f'the installed app holds {NAME} of another version (main {build_id or "unknown"}): this app needs update ' + ', '.join(sorted(b['display'] for b in builds.values())))
+        try: os.remove(os.path.join(a.out, 'ready'))
+        except FileNotFoundError: pass
+        done = 0
+        for z, i in mem:
+            dst = os.path.join(romfs, i.filename[len(RP):]); os.makedirs(os.path.dirname(dst), exist_ok=True)
+            with z.open(i) as src, open(dst, 'wb') as out: shutil.copyfileobj(src, out, 1 << 22)
+            done += 1
+            if done % 200 == 0: print(f'PROGRESS {done}/{len(mem)}', flush=True)
+        step(2, ' (from the installed app)')
+        pat = os.path.join(a.out, 'patched'); shutil.rmtree(pat, ignore_errors=True); os.makedirs(pat)
+        for z in zs:
+            for i in z.infolist():
+                if i.filename.startswith(PP) and not i.is_dir():
+                    with z.open(i) as src, open(os.path.join(pat, i.filename[len(PP):]), 'wb') as out: shutil.copyfileobj(src, out, 1 << 22)
+        if not all(os.path.isfile(os.path.join(pat, m + '.patched.bin')) for m in PROFILE.words('modules')): raise RuntimeError('the installed app lacks some of the rewritten code (assets/game/patched)')
+        log.write(f'from the installed app: main {build_id}, rewritten code {sorted(os.listdir(pat))[:3]}...\n')
+        step(3)
+        pkg = os.path.join(a.work, 'shader_pkg'); shutil.rmtree(pkg, ignore_errors=True)
+        if PROFILE.get('shader_oodle', 'off') == 'on':
+            if not os.path.isfile(tool('dmoodle')): raise RuntimeError(f'{NAME} needs the dmoodle tool, which this app build does not have')
+            env.update(DM_OODLE_HOST=tool('dmoodle'), DM_OODLE_MODULES=pat, DM_OODLE_FILTER='BNSH')
+        run([py, os.path.join(DM, 'gfx/tools/shader_split.py'), romfs, '-', pkg,   # ('-': no main; this game has no shaders in it)
+             os.path.join(a.work, 'shader_map.found.tsv'), os.path.join(a.work, 'shader_facts.found.tsv'), os.path.join(a.work, 'shader_pairs.found.tsv')],
+            env=dict(env, DM_NVN_CAPTURE=os.path.join(a.out, 'nvn_capture')))
+        from_app = True   # (steps 1-3 done: on to the translation)
+    if not resumed and not from_app:
         step(1)
         if os.path.isdir(ex): shutil.rmtree(ex)
         # the DLC unpacks into the scratch folder first: which game the files are is only known once they are unpacked, and the chosen game's own DLC (another game's
