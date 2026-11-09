@@ -10,6 +10,7 @@
 #include <math.h>
 #include <pthread.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -468,7 +469,8 @@ static void back_update(int menu) {
 static double g_hud_t; static _Atomic int g_cut;
 int touch_menu_cutscene(void) { return atomic_load(&g_cut) && atomic_load(&g_menu) == 0; }
 static void *watch_main(void *a) {
-    (void)a; prctl(PR_SET_NAME, "dm-touch", 0, 0, 0); if (!setup()) return NULL;
+    (void)a; prctl(PR_SET_NAME, "dm-touch", 0, 0, 0); setpriority(PRIO_PROCESS, (id_t)gettid(), 10);   // (its memory scans take 1-2 s of a core: never ahead of the game's threads)
+    if (!setup()) return NULL;
     for (;;) { usleep(500000);
         pthread_mutex_lock(&g_scan_mu);
         // (all memory again while few panes are found: the watcher starts with the overlay, on the title screen, before the field and its menus are loaded)
