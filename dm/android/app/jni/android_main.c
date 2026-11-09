@@ -593,7 +593,9 @@ static void graphics_auto(void) {
     if (g_th_mgr && g_th_st) { int st = g_th_st(g_th_mgr); float hr = g_th_hr ? g_th_hr(g_th_mgr, 10) : -1.0f;
         hot = st >= 3 || hr >= 0.95f; calm = st <= 1 && (hr < 0 || hr < 0.75f); }
     double fps = -1;
-    if (g_fps_guard && dm_nvn_frame_count) { uint64_t fr = dm_nvn_frame_count(); if (primed) fps = (fr - last_fr) / 5.0; last_fr = fr; primed = 1; }
+    // (the first minute of frames does not count: a save loading in runs slow while the game reads the world, Legends: Arceus at 22.6 fps for its first 20 s; that
+    //   dropped TV mode for two minutes on a phone that then held 30 in it, Galaxy S25+ 2026-11-09)
+    if (g_fps_guard && dm_nvn_frame_count) { uint64_t fr = dm_nvn_frame_count(); if (primed && fr >= 1800) fps = (fr - last_fr) / 5.0; last_fr = fr; primed = 1; }
     // the floor is 30: frames are paced at 30 or 60 (hle_nvn.c vstep_tick / dyn_tick), so 720p comes in only when even 30 is missed
     int short_ = fps > 1 && fps < 30 * 0.93, full = fps >= 30 * 0.97;   // (no frames at all: a load or a pause, not a slow scene)
     slow = short_ ? slow + 1 : 0;
