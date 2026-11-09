@@ -162,6 +162,25 @@ this engine**: uniform updates deferred inside a pass (`DM_VK_UB_DEFER`), transf
 
 Not yet run on a phone. First test: the setup from the owner's 1.1.1 dump, then the title screen, the save, the field at 30 fps (frame-time p95 under 33.3 ms).
 
+### Added 2026-11-09
+
+- **No reflections** (Arceus, on by default, a menu choice; `DM_FLAT_NORMALS=0` off): `dm/android/tools/flat_normals.py` makes the ground and tree-bark normal maps flat in the
+  player's own terrain packs (profile keys `flat_normals`, `flat_normals_names`), at the end of setup or at the next Play (`setup_game.py --flat-normals`), into
+  `<game>/flat_normals`; `android_main.c flat_normals` lays it under the RomFS after every mod. This is what the community's `no_reflections_v2_bc5de` mod does (its 10 packs
+  decoded in the Android Emulator with the game's own Oodle decoder: flat BC5 normal maps, R 133 G 124, plus higher-resolution albedo, nothing else). Checked against the
+  owner's packs: the mod's flat set plus `plants_tree01_02_nrm`, `plants_tree02_nrm`, `area00_glass01_nrm` (flat in some of the mod's packs only); every rewritten entry decodes
+  back to the original texture with only its texels changed. The engine-side cause of the purple (how detailed normals are lit here) is still open.
+- **GPU timestamps for counter reports** (`nvn_vk.c report_ts`, every game; `DM_VK_REPORT_TS=0` off): each report gets a Vulkan timestamp query where it is recorded (between passes,
+  never inside one), anchored at the submission's end. Before, all reports of a submission got the CPU's time at completion, so Game Freak's engines saw no GPU time and never
+  lowered their own 3D render scale. Arceus has one: `main+0xcc35a4` (state: level `+0x34`, mode `+0x28`/`+0x0`, cooldown `+0x40`) reads the GPU time at `[[main+0x42ef568]+0x158]` (ns),
+  averages 2 frames, steps one level lighter at 95 % of 33.3 ms and one sharper after 15 checks under 80 %; levels 0-3 = 3D buffer scale 1.0x1.0, 0.9x0.85, 0.85x0.8, 0.8x0.7, set
+  through the renderer's named parameters `3DBufferWidthScale` / `3DBufferHeightScale` (`main+0xcc386c` sets fixed ones per mode). Verify on the phone: the scale should drop in
+  heavy scenes (frame capture: the 3D targets' viewport).
+- **Transform feedback captures batched** (from the Arceus engine; `DM_VK_TF_BATCH=0` off): captures in a row share one 1x1 pass and one barrier unless one reads or rewrites what
+  an earlier one wrote; any game work ends the capture pass (`tf_end`). Arceus skins about 180 times a frame; each used to end the game's pass, open its own and wait on a full barrier.
+- **Lower specs on Auto**: Arceus on a low CPU or GPU gets Lower specs 1; Lower specs is now applied after the mods (before, `mods_romfs` saw the overlay set and skipped every mod).
+- Still to port from the Arceus engine, after measuring: deferred uniform updates (`DM_VK_UB_DEFER`), learnt attachment stores (`DM_VK_SKIP_STORES`), relaxed barriers (`DM_VK_BARRIER`).
+
 ## Phone state left behind
 
 - Galar Native: debuggable test build (versionCode 30); both games' `env.txt` have `DM_FPS_TARGET=30`, Sword's also `DM_VK_SPLIT=0`. No saves (the test names "Player" are from automated runs).
