@@ -284,3 +284,27 @@ On: the graphics work runs on its own thread, next to the game's. Not tested on 
 Freed %s GB left over from an earlier setup.	%s Go restants d’une configuration précédente ont été libérés.
 Or use the game from the %s app already on this phone (no dump or keys needed):	Ou utilisez le jeu de l'appli %s déjà sur ce téléphone (sans dump ni clés) :
 Set up from the installed app	Installer depuis l'appli installée
+Min / max as on the Switch	Min / max comme sur la Switch
+Auto: on with ARM's driver (v0.57)	Auto : activé avec le pilote d'ARM (v0.57)
+Off: the shaders as before v0.57	Désactivé : les shaders comme avant la v0.57
+About	À propos
+Official build	Version officielle
+Unofficial build	Version non officielle
+Signed with the %s release key.	Signée avec la clé de publication de %s.
+This copy was not signed by the %s project (signer %s). It may have been changed.	Cette copie n'a pas été signée par le projet %s (signataire %s). Elle a peut-être été modifiée.
+Official downloads: %s	Téléchargements officiels : %s
+Credits	Crédits
+Free software under the MIT License. This notice must stay with every copy.	Logiciel libre sous licence MIT. Cet avis doit accompagner chaque copie.
+Show the license	Voir la licence
+Third-party code	Code tiers
+Vibrate on press	Vibrer à l'appui
+Like rumble	Comme la vibration
+Like rumble: off when Rumble is Off	Comme la vibration : coupé quand la vibration est désactivée
+HD textures	Textures HD
+Auto: on for this phone	Auto : activé sur ce téléphone
+Auto: off for this phone (HD texture mods need 12 GB of memory)	Auto : désactivé sur ce téléphone (les mods de textures HD demandent 12 Go de mémoire)
+On: your HD texture mods load (more memory, slower area loads)	Activé : vos mods de textures HD sont chargés (plus de mémoire, chargements de zone plus lents)
+Off: the game's own textures (your HD texture mods stay installed)	Désactivé : les textures d'origine du jeu (vos mods de textures HD restent installés)
+L3 / R3 buttons	Boutons L3 / R3
+Off: no L3 / R3 on screen (a controller's stick buttons still work)	Désactivé : pas de L3 / R3 à l'écran (les boutons des sticks d'une manette fonctionnent toujours)
+On: L3 and R3 above the sticks (move them with Move the touch controls)	Activé : L3 et R3 au-dessus des sticks (déplacez-les avec Déplacer les commandes tactiles)
