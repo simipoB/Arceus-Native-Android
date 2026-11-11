@@ -548,17 +548,18 @@ static dm_ovl_item *add(dm_ovl_item *it, int *n, int max, float cx, float cy, fl
 }
 // a frosted-glass bubble (grey and see-through, so it sits on the game's picture instead of standing out from it): a soft shadow, a darker rim, the body,
 //   a faint shine, a thin light rim; the label on top. Pressed: lighter. lit: a control that is on (lock-on), a brighter frost
-// The game's own HUD block in the bottom right (the party Pokemon / items selector, its count and name; game picture coordinates 1460-1920 x 760-1080):
-//   a button over it keeps only its light rim and label, so the icons there are never dulled by the grey glass
+// The game's own HUD block in the bottom right (the party Pokemon / items selector, its count and name; game picture coordinates 1460-1920 x 800-1080):
+//   a button over it keeps only its light rim and label, so the icons there are never dulled by the grey glass. The top is 800, where the item / party circles
+//   start: B's default place ends at 760, and a top there made B flip between the two looks as it shrank and grew when pressed
 static int over_hud(float x, float y, float r) {
-    float x0, y0, x1, y1; sel_to_win(1460, 760, &x0, &y0); sel_to_win(1920, 1080, &x1, &y1);
+    float x0, y0, x1, y1; sel_to_win(1460, 800, &x0, &y0); sel_to_win(1920, 1080, &x1, &y1);
     float nx = x < x0 ? x0 : x > x1 ? x1 : x, ny = y < y0 ? y0 : y > y1 ? y1 : y;
     return (nx - x) * (nx - x) + (ny - y) * (ny - y) < r * r;
 }
 static void bubble(dm_ovl_item *it, int *n, int max, const ctl *c, int on, int lit, float a) {
     float r = on ? c->r * 0.95f : c->r, x = c->cx, y = c->cy, th = g_h / 1080.0f;
     int g = lit ? 150 : 52; if (on) g += 60;
-    float fill = over_hud(x, y, r) ? 0.0f : 1.0f;   // (over the game's HUD: rim and label only)
+    float fill = over_hud(x, y, c->r) ? 0.0f : 1.0f;   // (over the game's HUD: rim and label only; judged at the button's own size, so pressing it never changes its look)
     add(it, n, max, x, y + r * 0.05f, r * 1.02f, OVL_DISC, 0, 0, 0, 0.18f * a * fill);
     add(it, n, max, x, y, r, OVL_DISC, g / 2, g / 2, g / 2 + 2, 0.40f * a * fill);
     add(it, n, max, x, y, r * 0.90f, OVL_DISC, g, g + 2, g + 6, (on || lit ? 0.70f : 0.45f) * a * fill);
