@@ -1,90 +1,92 @@
-# Galar Native
+# Arceus Native
 
-*(formerly PKShield)*
-
-**Pokémon Sword and Shield (Switch, update 1.3.2) running natively on Android.** Not emulation: the game's own ARM64 code runs on the phone, and its graphics (NVN) run on Vulkan.
+**Pokémon Legends: Arceus (Switch, update 1.1.1) running natively on Android.** Not emulation: the game's own ARM64 code runs on the phone, and its graphics (NVN) run on Vulkan. Arceus Native is built on the [Galar Native](https://github.com/simipoB/Galar-Native-Android) engine.
 
 > [!WARNING]
-> **Beta.** See [Compatibility](#compatibility). Reports with logs help most ([CONTRIBUTING.md](CONTRIBUTING.md)).
+> **Early release.** Tested on a Snapdragon 8 Elite (Adreno 830) so far. Reports with logs help most ([CONTRIBUTING.md](CONTRIBUTING.md)).
 
 > [!NOTE]
-> **No game files, code, shaders or keys are included.** You need your own dump (base game + update 1.3.2) and your console's `prod.keys`.
+> **No game files, code, shaders or keys are included.** You need your own copy of the game.
 
 ## Install
 
-1. Install `GalarNative.apk` from [Releases](https://github.com/simipoB/Galar-Native-Android/releases) (or [build it](docs/BUILDING.md)).
-2. Choose your **game files** (`.nsp` / `.xci`, update 1.3.2, any DLC) and **keys**. Keys stay on the phone.
-3. **Set up the game.** Setup detects Sword or Shield from your files. When it's done, the app opens straight into the game.
+1. Install `ArceusNative.apk` from [Releases](https://github.com/simipoB/Arceus-Native-Android/releases) (or [build it](docs/BUILDING.md)).
+2. Set up the game, one of two ways:
+   - **From your own dump:** choose your game files (`.nsp` / `.xci`, base game and update 1.1.1) and your console's `prod.keys`. Keys stay on the phone.
+   - **From the older Arceus app:** if the earlier Arceus port (`com.nxnative.arceus`) is installed, tap **Set up from the installed app**. No dump or keys needed, and its save comes along.
+3. When setup is done, the app opens straight into the game.
 
-- One app runs both games, each with its own setup, saves, settings and mods. With both installed, the app icon lets you choose; each game's home screen shortcut has its own name and icon.
-- It updates PKShield in place (package `com.nxnative.pokemonshield`), so your setup and saves are kept.
-- Official releases are signed with `SHA-256: a5f49b44b6181758d82504f3beb0851c92093f454c792b49688728130673a070`. Any other build says "Unofficial build".
+- Official releases are signed with `SHA-256: a5f49b44b6181758d82504f3beb0851c92093f454c792b49688728130673a070`. Any other build says "Unofficial build". An official update installs over the last one and keeps your setup and saves.
 
 ## Requirements
 
 - Android 12+, arm64, Vulkan 1.1+.
-- About 15 GB free per game. 8 GB of RAM or more is best.
+- Free space for the game's files plus about 1 GB of translated shaders.
+- 8 GB of RAM or more is best. On weaker phones, **Lower specs** turns on by itself.
 
 ## Compatibility
 
-| GPU | Driver | Status |
-| --- | --- | --- |
-| **Adreno 6xx–8xx** (Snapdragon 845+) | Qualcomm or **Turnip** | Plays. Turnip fixes old-driver crashes (#44). |
-| **Mali G57 / G68 / G77 / G78** | Stock or **PanVK** | Starts; stock driver has rendering gaps (#32). Try PanVK. |
-| **Mali G52 / G72 / G76** | Stock or PanVK | Low settings. |
-| **Mali G610–G925, Immortalis** | Stock only | White-screen fix (#40, #47), awaiting reports. |
-| **Xclipse 540 / 940** | Stock | Crash fixes (#41, #45), awaiting reports. |
-| **PowerVR** (Tensor G5 / G6) | Stock | Untested. |
+| GPU | Status |
+| --- | --- |
+| **Adreno 7xx–8xx** (Snapdragon 8 Gen 1 and later) | Plays at a locked 30 (tested on Adreno 830). |
+| **Older Adreno** | Should run; Lower specs helps. Awaiting reports. |
+| **Mali, Xclipse, PowerVR** | Untested. The engine's Mali and Xclipse fixes from Galar Native are in. Awaiting reports. |
 
 ## Playing
 
-- **Touch:** on-screen controls, with **☰** (settings) next to −. Two-finger tap = B.
-- **Controllers:** hide the touch controls automatically. Hold **−** and **+** together for 1 s for ☰, or **−** for 3 s to remap buttons. Rumble works on controllers and phones.
-- **Handhelds** (AYN Odin / Thor, Retroid Pocket, AYANEO, Anbernic, Logitech G Cloud...): detected; the built-in controls are used from the start.
-- **Logs:** `Download/PokemonSword-log.txt` or `Download/PokemonShield-log.txt`.
+Arceus is played by touch the way the game invites: only the movement stick, **−**, **+** and **☰** (settings) are on screen, and the rest happens on the game itself.
+
+- **In the world:** tap to interact (A), swipe up to throw. The **Poké Ball button** aims and throws, and the **lock-on button** sits above it.
+- **In menus:** tap items directly. The game's own **B Back** prompt is the back button. On the map, drag to pan and pinch to zoom.
+- **Controllers:** hide the touch controls automatically. Hold **−** and **+** together for 1 s for ☰, or **−** for 3 s to remap buttons.
+- **Touch controls:** frosted grey so they sit on the picture, and they fade when untouched. Move them, or switch on L3 / R3, in ☰ → Controls.
+- **Logs:** `Download/PokemonLegendsArceus-log.txt`.
 
 ## Settings (☰)
 
 | Setting | Choices |
 | --- | --- |
-| Picture | 16:9, fill screen, 20:9 (for widescreen mods) |
+| Picture | 16:9, fill screen, 20:9 |
 | Upscaling | Auto, Sharp, SGSR, Smooth |
+| Frame generation | Off, On (experimental), Lossless Scaling (after **Import Lossless.dll**) |
 | Graphics | Auto, High (1080p), Low (720p), Adaptive |
+| No reflections | On (default): smooth ground lighting, no purple shadows. Off: the ground's full lighting detail |
+| Lower specs | Auto, Off, On (shorter draw distance, lighter shadows), Lowest |
 | Textures | Auto, Full, Half; texture format (compact on Mali / Xclipse / PowerVR) |
-| Frame rate | Auto, 30, 60 (experimental), Sword & Shield |
-| Graphics driver | Phone's own, Turnip, PanVK, or any driver package (with their options) |
-| Controls | Button layout, remapping, touch look and layout, rumble |
+| Controls | Button layout, remapping, touch look and layout, rumble, vibrate on press |
 | Performance overlay | fps, temperature, GPU, free memory, battery |
-| Online room | Server and room code for local play over the internet |
 | Mods, saves | Import, switch, order and annotate mods; export / import saves |
 | Language | English, Español, Português, Français, 日本語 (Auto: the phone's) |
 
-**Auto** rates the phone's CPU, GPU and RAM (top, mid or low) and picks graphics, textures and filtering from that. The menu shows what it picked.
+**Auto** rates the phone's CPU, GPU and RAM and picks graphics, textures and filtering from that. The menu shows what it picked. When the phone runs hot, the 3D resolution drops to about 720p until it cools, so the frame rate holds.
 
-## Local play
+## Frame generation
 
-Link battles, trades and Max Raids with nearby phones on the same Wi-Fi, or with friends anywhere through an **Online room** ([host your own server](dm/server/README.md), e.g. on Railway). Mods must be off. Nintendo's online services aren't available.
+- **On:** for each frame the game draws at 30 fps, the GPU makes the picture halfway to the next one and shows it first, so the screen moves like 60. Slightly more input delay, and some smearing on very fast motion.
+- **Lossless Scaling:** if you own Lossless Scaling, tap **Import Lossless.dll** and pick the `Lossless.dll` from your copy. The phone converts its frame-generation shaders once, and Lossless Scaling then appears as a choice. Nothing from Lossless Scaling is in the app.
 
 ## Mods
 
-Import a mod `.zip` (`romfs/` file replacements, `exefs/*.pchtxt` code patches for 1.3.2) and switch mods on or off in ☰ → Mods. **Order and notes** sets the load order (higher wins), warns when two mods replace the same files, and keeps each mod's readme as its notes. If the game crashes with mods on, they're switched off on the next start. When the mods change, the app translates any new shaders they bring before the game starts (a short wait, once).
+Import a mod `.zip` (`romfs/` file replacements, `exefs/*.pchtxt` code patches for 1.1.1) and switch mods on or off in ☰ → Mods. **Order and notes** sets the load order (higher wins) and warns when two mods replace the same files. If the game crashes with mods on, they're switched off on the next start. The **No reflections** fix is built in, so you don't need a mod for it.
 
 ## Known gaps
 
-- Nintendo's online services (Surprise Trade, online battles and raids).
-- Wild Area water renders darker than on the Switch.
+- Nintendo's online services.
+- Faster rendering (experimental) can flicker.
 
 ## License
 
-Galar Native is free software under the **GNU General Public License, version 3 or later** ([LICENSE](LICENSE), [NOTICE](NOTICE)): you may use, share and change it, and anything you distribute that is based on it must be under the same license with its source available. The code that came from d2r-mobile / nxnative, and Galar Native's code from before the switch, also stay under their original [MIT notice](LICENSE-MIT). Lossless Scaling is not included: its frame generation uses the `Lossless.dll` from your own copy.
+Arceus Native is free software under the **GNU General Public License, version 3 or later** ([LICENSE](LICENSE), [NOTICE](NOTICE)): you may use, share and change it, and anything you distribute that is based on it must be under the same license with its source available. The code that came from d2r-mobile / nxnative, and the engine's code from before the switch, also stay under their original [MIT notice](LICENSE-MIT). Lossless Scaling is not included: its frame generation uses the `Lossless.dll` from your own copy.
 
 ## Credits
 
-- **[d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile)** and **nxnative** (MIT): the engine this is built on.
+- **[Galar Native](https://github.com/simipoB/Galar-Native-Android)**: the engine and app this is built on.
+- **[d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile)** and **nxnative** (MIT): the engine Galar Native is built on.
 - **Ryujinx** (MIT): shader translator. **[LibHac](https://github.com/Thealexbarney/LibHac)**: NSP / XCI reading.
+- **Eden** (GPL-3.0): the Lossless Scaling frame-generation chain. **dxbc-spirv** (MIT): converting the imported shaders.
 - **[libadrenotools](https://github.com/bylaws/libadrenotools)** (BSD-2-Clause) and **Mesa Turnip / PanVK**: custom drivers.
 - **[Snapdragon Game Super Resolution](https://github.com/SnapdragonStudios/snapdragon-gsr)** (Qualcomm, BSD-3-Clause): the SGSR upscaler.
 - **[Atmosphère](https://github.com/Atmosphere-NX/Atmosphere)**, **yuzu**: references.
 - **SPIRV-Cross**, **CPython**, **capstone**, **LZ4**, **libvpx**, **stb_vorbis**, **Vulkan Headers**, **DejaVu Sans**, **native_app_glue**.
 
-Pokémon, Pokémon Sword and Pokémon Shield are trademarks of Nintendo, Creatures Inc. and GAME FREAK inc. Not affiliated with or endorsed by them.
+Pokémon and Pokémon Legends: Arceus are trademarks of Nintendo, Creatures Inc. and GAME FREAK inc. Not affiliated with or endorsed by them.
