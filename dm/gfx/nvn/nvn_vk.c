@@ -1206,6 +1206,7 @@ static void arena_reset(sub_t *s) {   // the submission's GPU work is done: big 
 }
 static VkCommandBuffer ucb(void);   // the upload command buffer of the current submission (or of a one-off one)
 static void pass_end(void);
+static int g_rt_stale;   // a target change kept the open pass, to be checked at the next draw or clear (rt_resolve, DM_VK_PASS_DEFER)
 static void state_reset(void);
 static uint64_t g_frame_no;
 static uint64_t g_dsc_gen = 1;   // descriptor pools reset (desc_flush's reuse: a set from an older generation is gone)
@@ -2745,7 +2746,7 @@ static int P_tf;   // the open pass is transform feedback captures' (tf_pass_beg
 static struct { uint64_t lo, hi; } g_tfw[64]; static int g_ntfw;   // what the captures in the open capture pass wrote
 static void ubd_flush(void);
 static int g_nubd;
-static void pass_end(void) { if (P.open) { rend_end(CB()); P.open = 0;
+static void pass_end(void) { g_rt_stale = 0; if (P.open) { rend_end(CB()); P.open = 0;
     if (!P_tf && P.hd) sk_ro_note(P.dkey, P.dwrote, 0);
     if (!P_tf && P.hs) sk_ro_note(P.skey, P.swrote, 0);
     g_after_pass = !P_tf; g_bar_clean = 0;
@@ -2874,8 +2875,23 @@ static void pass_writes(int depth, int stencil) {
     }
     if (depth) P.dwrote = 1; if (stencil) P.swrote = 1;
 }
+// Target changes that need no new pass (DM_VK_PASS_DEFER=1, opt-in until measured): the game sets target A, then B with nothing drawn, then A again, and every change
+//   ended the pass, so the driver set up a new one for the same attachments (about 4 of Legends: Arceus' ~55 a frame; on Adreno each costs the driver an allocation
+//   in vkCmdBeginRendering). A change while a pass is open now only records the new targets (g_rt_stale); the next draw or clear goes on in the open pass when they
+//   are the ones it was begun with (g_pass_resumed), and ends it as before when they are not. Pending clears belong to the old targets: then the change ends the pass at once
+static p_set_rt g_pass_rt; static uint64_t g_pass_resumed;
+static int pass_defer_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_VK_PASS_DEFER"); v = e && atoi(e) != 0; if (v) VLOG("target changes that need no new pass keep it open (DM_VK_PASS_DEFER)"); } return v; }
+static int rt_same(const p_set_rt *a, const p_set_rt *b);
+static void sub_split_at_target(void);
+static void rt_resolve(void) {   // a deferred target change: the open pass goes on if the targets came back to its own, else it ends as a target change ends it
+    if (!g_rt_stale) return;
+    g_rt_stale = 0; if (!P.open) return;
+    if (rt_same(&g_pass_rt, &R.rt)) { g_pass_resumed++; return; }
+    g_brk[0]++; g_pass_last_by_rt = 1; sub_split_at_target(); pass_end();
+}
 static int pass_begin(void) {
     tf_end();
+    if (P.open && g_rt_stale) rt_resolve();
     if (P.open) return 1;
     if (!R.has_rt) { RED_ONCE(21, "draw with no render target set"); return 0; }
     static int prof = -1; if (prof < 0) prof = getenv("DM_VK_PROF") != NULL; uint64_t pt0 = prof ? mono_ns() : 0;   // (DM_VK_PROF: g_pb_ns)
@@ -2961,7 +2977,7 @@ static int pass_begin(void) {
         memcpy(g_pass_lastv, v, sizeof v); g_pass_lastwh[0] = tw; g_pass_lastwh[1] = th; g_pass_lastwh[2] = P.layers; g_pass_last_by_rt = 0;
     }
     memset(R.clear_c, 0, sizeof R.clear_c); R.clear_d = R.clear_s = 0;
-    P.open = 1;
+    P.open = 1; g_pass_rt = R.rt;
     return 1;
 }
 static int getenv_nomerge(void) { static int v = -1; if (v < 0) v = getenv("DM_VK_NO_PASS_MERGE") != NULL; return v; }   // A/B switch
@@ -3147,11 +3163,41 @@ static VkPipeline pso_lookup_s(vprog *pr, const pkey *k, const sst *ss, int reco
     pthread_mutex_unlock(&g_psomu);
     return p;
 }
+// Pipelines built in the background (DM_VK_ASYNC_PSO=1, opt-in until measured on phones): one the game needs that neither the prewarm list nor the cache had is
+//   compiled by a worker, and the draws that need it are skipped until it is done (an object missing for a frame or two instead of a hitch, as emulators' asynchronous
+//   shaders do). The queue holds 256; a full queue compiles on the spot as before
+#define APSO_N 256
+static struct { vprog *pr; pkey k; } g_apso[APSO_N]; static int g_apso_h, g_apso_n; static pthread_mutex_t g_apso_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_apso_cv = PTHREAD_COND_INITIALIZER; static nvn_hmap g_pso_pend = {.klen = sizeof(pkey)}; static _Atomic uint64_t g_apso_done, g_apso_skipped;
+static VkPipeline pso_lookup(vprog *pr, const pkey *k, int record);
+static void *apso_main(void *a) {
+    (void)a;
+    for (;;) {
+        pthread_mutex_lock(&g_apso_mu); while (!g_apso_n) pthread_cond_wait(&g_apso_cv, &g_apso_mu);
+        vprog *pr = g_apso[g_apso_h].pr; pkey k = g_apso[g_apso_h].k; g_apso_h = (g_apso_h + 1) % APSO_N; g_apso_n--; pthread_mutex_unlock(&g_apso_mu);
+        pso_lookup(pr, &k, 2);   // (2: compile now, recorded as the game's)
+        pthread_mutex_lock(&g_psomu); nvn_hm_del(&g_pso_pend, &k); pthread_mutex_unlock(&g_psomu); atomic_fetch_add(&g_apso_done, 1);
+    }
+    return NULL;
+}
+static int apso_on(void) {
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("DM_VK_ASYNC_PSO"); v = e && atoi(e) != 0;
+        if (v) { pthread_t t; if (pthread_create(&t, NULL, apso_main, NULL)) v = 0; else { pthread_detach(t); VLOG("pipelines the lists did not have: built in the background, their draws skipped until then (DM_VK_ASYNC_PSO)"); } } }
+    return v;
+}
 static VkPipeline pso_lookup(vprog *pr, const pkey *k, int record) {
     pthread_mutex_lock(&g_psomu);
     VkPipeline p = nvn_hm_get(&g_pso, k); int failed = p ? 0 : nvn_hm_get(&g_pso_fail, k) != NULL;
+    if (!p && !failed && record == 1 && apso_on()) {   // the game's draw: to the worker, skipped this time
+        int queued = nvn_hm_get(&g_pso_pend, k) != NULL;
+        if (!queued) { pthread_mutex_lock(&g_apso_mu);
+            if (g_apso_n < APSO_N) { int t = (g_apso_h + g_apso_n) % APSO_N; g_apso[t].pr = pr; g_apso[t].k = *k; g_apso_n++; queued = 1; nvn_hm_put(&g_pso_pend, k, (void *)1); pthread_cond_signal(&g_apso_cv); }
+            pthread_mutex_unlock(&g_apso_mu); }
+        if (queued) { pthread_mutex_unlock(&g_psomu); atomic_fetch_add(&g_apso_skipped, 1); return VK_NULL_HANDLE; } }
     pthread_mutex_unlock(&g_psomu);
     if (p || failed) return p;
+    if (record == 2) record = 1;
     p = pso_make(pr, *k, NULL);   // compiled outside the lock: the prewarm thread and the game's thread compile in parallel
     pthread_mutex_lock(&g_psomu);
     VkPipeline q = nvn_hm_get(&g_pso, k);
@@ -4131,10 +4177,15 @@ void mtl_exec(const uint8_t *p) {
             case OP_COPY_B2B: { uint64_t s, d, n; memcpy(&s, a, 8); memcpy(&d, a + 8, 8); memcpy(&n, a + 16, 8); sub_copy(s, d, n); break; }
             case OP_UPDATE_UB: { uint64_t d, n; memcpy(&d, a, 8); memcpy(&n, a + 8, 8); sub_update(a + 16, d, n); break; }
             case OP_SET_RT: g_stat_passes++; tf_end(); if (P.open && R.has_rt && !getenv_nomerge() && rt_same(&R.rt, (const p_set_rt *)a)) { g_stat_rt_same++; break; }
+                if (P.open && pass_defer_on() && !getenv_nomerge()) {   // (deferred: rt_resolve at the next draw or clear)
+                    int pend = R.clear_d || R.clear_s; for (int i = 0; i < 8; i++) pend |= R.clear_c[i];
+                    if (!pend) { R.rt = *(const p_set_rt *)a; g_rt_stale = 1; break; } }
+                g_rt_stale = 0;
                 if (P.open) { g_brk[0]++; g_pass_last_by_rt = 1; }
                 sub_split_at_target();
                 pass_flush(); R.rt = *(const p_set_rt *)a; R.has_rt = 1; break;
             case OP_CLEAR_COLOR: { tf_end();
+                rt_resolve();
                 const p_clear_color *c = (const p_clear_color *)a;
                 if (c->index < 0 || c->index >= R.rt.n || !R.rt.color[c->index]) { RED_ONCE(53, "colour clear target %d invalid", c->index); break; }
                 VkClearColorValue cv; memcpy(cv.float32, c->rgba, 16);
@@ -4147,6 +4198,7 @@ void mtl_exec(const uint8_t *p) {
                 R.clear_c[c->index] = 1; R.cc[c->index] = cv; break;
             }
             case OP_CLEAR_DS: { tf_end();
+                rt_resolve();
                 const p_clear_ds *c = (const p_clear_ds *)a;
                 if (P.open || (R.rt.depth && !scissor_full(R.rt.depth, &R.rt.dview, R.rt.has_dview))) {
                     VkClearValue v = { .depthStencil = { c->depth, (uint32_t)c->stencil } };
@@ -4958,6 +5010,8 @@ uint64_t mtl_present(const tex_t *t, double period_s, const int crop[4]) {
     if (n == 1 || n % 300 == 0) VLOG("present %llu: %llu render target sets (%llu kept the open pass, %llu passes begun), %llu draws so far; textures uploaded %llu (re-uploaded %llu, %.1f MB)%s", (unsigned long long)n, (unsigned long long)g_stat_passes, (unsigned long long)g_stat_rt_same, (unsigned long long)g_stat_begins,
                                      (unsigned long long)g_stat_draws, (unsigned long long)g_pkg_uploads, (unsigned long long)g_pkg_reuploads, g_up_bytes / 1048576.0,
                                      g_bcgpu ? (snprintf(g_bc_line, sizeof g_bc_line, "; BC layer: %llu levels, %llu copies", (unsigned long long)g_bc_gpu_levels, (unsigned long long)g_bc_gpu_copies), g_bc_line) : "");
+    if (n % 300 == 0 && atomic_load(&g_apso_done) + atomic_load(&g_apso_skipped)) VLOG("present %llu: pipelines built in the background %llu, draws skipped waiting for one %llu (DM_VK_ASYNC_PSO)", (unsigned long long)n, (unsigned long long)atomic_load(&g_apso_done), (unsigned long long)atomic_load(&g_apso_skipped));
+    if (n % 300 == 0 && g_pass_resumed) VLOG("present %llu: %llu target changes kept their open pass (DM_VK_PASS_DEFER)", (unsigned long long)n, (unsigned long long)g_pass_resumed);
     if (n % 300 == 0 && !VPROF_ON)   // (running totals: DM_VK_PROF prints these per 300 frames instead, and resets them)
         VLOG("passes so far: %llu begun; ended by a new target %llu, a uniform update %llu, a buffer copy %llu, a buffer fill %llu, any work outside a pass %llu (those three included); "
              "%llu opened onto exactly the attachments a target change had just ended", (unsigned long long)g_stat_begins, (unsigned long long)g_brk[0], (unsigned long long)g_brk[1],
