@@ -179,7 +179,9 @@ static int menu_back(float x, float y) {
     return lx >= 1800 && ly >= 1010;
 }
 static int target_at(float x, float y) {
-    if (GESTURES_ON && !touch_menu_active() && sel_part(x, y) >= 0) return C_SEL;   // on the game's selector: its own gestures (touch_ui_event); not over a menu, where its flick up (ZR) would switch the menu's tab
+    // a touch right on a button (its drawn size) is that button first: with the picture at 20:9 or filling the screen, the game's selector zone below lies under
+    //   A and B (at 16:9 it sits left of them), and their taps went to the selector's gestures instead
+    if (GESTURES_ON && !touch_menu_active() && sel_part(x, y) >= 0) { for (int c = C_A; c < NCTL; c++) if (c != C_SEL && hit(c, x, y, 1.0f)) return c; return C_SEL; }   // on the game's selector: its own gestures (touch_ui_event); not over a menu, where its flick up (ZR) would switch the menu's tab
     int menu = GESTURES_ON && touch_menu_active();   // a menu open: every control works as in the field (the ball aside); a touch off them taps the menu's items
     if (hit(C_RSTICK, x, y, menu ? 1.0f : 1.3f)) return C_RSTICK;
     for (int c = C_A; c < NCTL; c++) if (!(menu && (c == C_THROW || c == C_LOCK)) && hit(c, x, y, c == C_BACK ? 2.5f : menu ? 1.0f : 1.3f)) return c;   // thumbs miss: touch areas 1.3 times the drawing (the small back button 2.5; in menus the drawing, so items beside them stay tappable)
