@@ -315,3 +315,6 @@ Own Lossless Scaling? Import its Lossless.dll (in the program's folder) to use i
 Import Lossless.dll	Importar Lossless.dll
 Lossless Scaling imported. Choose it under Frame generation.	Lossless Scaling importado. Elígelo en Generación de fotogramas.
 Could not import Lossless Scaling: %s	No se pudo importar Lossless Scaling: %s
+Sustained performance	Rendimiento sostenido
+Off: the phone's full speed, which drops when it gets hot	No: toda la velocidad del teléfono, que baja cuando se calienta
+On: a speed the phone can hold for hours, fewer slowdowns when hot	Sí: una velocidad que el teléfono aguanta durante horas, menos bajones al calentarse

@@ -315,3 +315,6 @@ Own Lossless Scaling? Import its Lossless.dll (in the program's folder) to use i
 Import Lossless.dll	Lossless.dllを取り込む
 Lossless Scaling imported. Choose it under Frame generation.	Lossless Scalingを取り込みました。フレーム生成で選んでください。
 Could not import Lossless Scaling: %s	Lossless Scalingを取り込めませんでした：%s
+Sustained performance	持続パフォーマンス
+Off: the phone's full speed, which drops when it gets hot	オフ：端末の最大速度（熱くなると下がります）
+On: a speed the phone can hold for hours, fewer slowdowns when hot	オン：何時間も保てる速度。熱くなっても遅くなりにくくなります
