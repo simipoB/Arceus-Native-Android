@@ -30,7 +30,14 @@
 | --- | --- |
 | **Adreno 7xx–8xx** (Snapdragon 8 Gen 1 and later) | Plays at a locked 30 (tested on Adreno 830). |
 | **Older Adreno** | Should run; Lower specs helps. Awaiting reports. |
-| **Mali, Xclipse, PowerVR** | Untested. The engine's Mali and Xclipse fixes from Galar Native are in. Awaiting reports. |
+| **Mali, Xclipse, PowerVR** | Untested. The engine's Mali and Xclipse fixes from Galar Native are in, including the fix for the crash a few frames in on Arm's driver (v0.21). Awaiting reports. |
+
+## What's new
+
+- **Mali crash fix (v0.21).** Arm's driver makes more screen buffers than the game asks for (14 for 8 on a Mali-G57). The game had room for 8, so on some Mali phones the driver closed it a few frames in. It now has room for 32 and uses the count the driver reports.
+- **Multiply by zero as on the Switch (Mali test, v0.21).** On the Switch's GPU, 0 × infinity is 0. On phones it's NaN, which can show as white, black or missing surfaces. Turning on ☰ → White screen tests (Mali) → *Multiply by zero as on the Switch* rewrites each shader's SPIR-V as it loads so that every multiply follows the Switch's rule. Off by default and a little slower; tell us in an issue if it changes your screen.
+- **CPU pinning (v0.22).** The game keeps its two busiest threads on the phone's fastest cores. When a hot phone slows those cores down, the threads are now never squeezed onto fewer cores than there are threads. A hot Galaxy Z Flip5 had put both on one slowed core.
+- **Two speed tests, off by default (v0.22).** `DM_VK_PASS_DEFER=1` keeps the current render pass open when the game changes targets in a way that needs no new pass. `DM_VK_ASYNC_PSO=1` builds pipelines the shader lists didn't have in the background instead of pausing the frame. Put either in `env.txt` to try it, and tell us what changed.
 
 ## Playing
 
