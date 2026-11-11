@@ -167,6 +167,7 @@ static int g_fctl;    // every shader asks for SignedZeroInfNanPreserve (spv_flo
 static int g_arm_rel, g_arm_p;   // Arm's own Mali driver: its release, r<rel>p<p> (driverVersion is VK_MAKE_VERSION(rel, p, 0): 0xb001000 = r44p1); 0 for any other driver
 static int g_arm_beta;           // ... a beta build of it (driverInfo "v1.r49p1-03bet0": the G925's)
 static int g_clampzero; static _Atomic int g_clampzero_n;   // shaders get spv_clamp_zero (Arm erratum 3779215: mtl_init decides); how many it changed
+static int g_fmz; static _Atomic int g_fmz_n;   // shaders get spv_fmz (every multiply by 0 gives 0, as Maxwell's FMZ: DM_VK_FMZ=1, a test); how many it changed
 static int g_nanmm; static _Atomic int g_nanmm_n;           // shaders get spv_nan_minmax (min / max / saturate drop NaN as on Maxwell: mtl_init decides; 2: spv_nan_select too); how many it changed
 static int g_dualsrc = 1;        // the device blends with a second shader output (dualSrcBlend): Arm's own Mali driver has none (r44p1)
 static int g_tlsem = 1;          // the device has timeline semaphores; 0: each submission signals a fence of its own instead (older Adreno stock drivers, Vulkan 1.1, #99)
@@ -480,6 +481,11 @@ void mtl_init(void) {
     //   definition); DM_VK_NAN_MINMAX=0 / 1 decides on any driver
     //   v0.59 with this on was still white on Arm's r49p1 (#111 G925, #128 G720): nothing shows that Arm's compiler gives the N forms their NaN rule, so its driver gets
     //   the rule written out as well (spv_nan_select: OpIsNan + OpSelect after each op, 2); DM_VK_NAN_MINMAX=1 is the N forms alone
+    // FMZ (spv_fmz): Maxwell's multiplies give 0 when an operand is 0, infinity and NaN included, and SPIR-V's give NaN, which a white or glowing surface can come from
+    //   (a light at the eye's position: 0 x inf). Every multiply gets the rule written out: a test of the theory on the white screen of Arm's own driver (#156), off
+    //   unless DM_VK_FMZ=1 (the in-game menu's Mali tests); the translator would then get it per instruction (a new shader chain)
+    { const char *e = getenv("DM_VK_FMZ"); g_fmz = e && atoi(e) > 0;
+      if (g_fmz) VLOG("shaders: a multiply by 0 gives 0 even for infinity and NaN, as on the Switch's GPU (FMZ, every multiply: DM_VK_FMZ)"); }
     { const char *e = getenv("DM_VK_NAN_MINMAX"); g_nanmm = e ? atoi(e) : g_arm_rel ? 2 : 0; if (g_nanmm < 0 || g_nanmm > 2) g_nanmm = 1;
       if (g_nanmm) VLOG("shaders: min / max / saturate give the operand that is not NaN, as on the Switch's GPU (NMin / NMax / NClamp%s%s)", g_nanmm == 2 ? " and the rule written out with isnan" : "",
                         e ? ", DM_VK_NAN_MINMAX" : ", Arm's own driver"); }
@@ -2426,6 +2432,7 @@ static vshader *shader_load(const uint8_t key[8], int st) {
     if (g_nanmm) { size_t nw; uint32_t *c2 = spv_nan_minmax(code, ns / 4, &nw); if (c2) { free(code); code = c2; ns = nw * 4; atomic_fetch_add(&g_nanmm_n, 1); } }   // (before spv_clamp_zero, which knows both)
     if (g_clampzero) { size_t nw; uint32_t *c2 = spv_clamp_zero(code, ns / 4, &nw); if (c2) { free(code); code = c2; ns = nw * 4; atomic_fetch_add(&g_clampzero_n, 1); } }   // (Arm erratum 3779215)
     if (g_nanmm == 2) { size_t nw; uint32_t *c2 = spv_nan_select(code, ns / 4, &nw); if (c2) { free(code); code = c2; ns = nw * 4; } }   // (after spv_clamp_zero: its zero is the operand selected)
+    if (g_fmz) { size_t nw; uint32_t *c2 = spv_fmz(code, ns / 4, &nw); if (c2) { free(code); code = c2; ns = nw * 4; atomic_fetch_add(&g_fmz_n, 1); } }
     if (spst == 0 || spst == 2) { size_t nw; uint32_t *c2 = spv_init_outputs(code, ns / 4, &nw); if (c2) { free(code); code = c2; ns = nw * 4; } }   // outputs start at (0, 0, 0, 1) as on the hardware
     if (st == 0 && glcode) {
         size_t nw;
@@ -2437,6 +2444,7 @@ static vshader *shader_load(const uint8_t key[8], int st) {
         if (g_nanmm && (c2 = spv_nan_minmax(glcode, ngl / 4, &nw))) { free(glcode); glcode = c2; ngl = nw * 4; }
         if (g_clampzero && (c2 = spv_clamp_zero(glcode, ngl / 4, &nw))) { free(glcode); glcode = c2; ngl = nw * 4; }
         if (g_nanmm == 2 && (c2 = spv_nan_select(glcode, ngl / 4, &nw))) { free(glcode); glcode = c2; ngl = nw * 4; }
+        if (g_fmz && (c2 = spv_fmz(glcode, ngl / 4, &nw))) { free(glcode); glcode = c2; ngl = nw * 4; }
         c2 = spv_init_outputs(glcode, ngl / 4, &nw); if (c2) { free(glcode); glcode = c2; ngl = nw * 4; }
         VkShaderModuleCreateInfo gci = { .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = ngl, .pCode = glcode };
         VkResult gr = vkCreateShaderModule(g_dev, &gci, NULL, &s->glmod);
@@ -4944,7 +4952,7 @@ uint64_t mtl_present(const tex_t *t, double period_s, const int crop[4]) {
              "stores skipped %llu (read after all %llu), depth / stencil begun store-none %llu (written after all %llu)", (unsigned long long)n,
              (unsigned long long)g_bar_full, (unsigned long long)g_bar_narrow, (unsigned long long)g_bar_none, (unsigned long long)g_ubd_deferred, (unsigned long long)g_ubd_conflicts,
              (unsigned long long)g_sk_skipped, (unsigned long long)g_sk_wrong, (unsigned long long)g_ro_passes, (unsigned long long)g_ro_wrong);
-    if (n % 1800 == 0 && (g_nanmm || g_clampzero)) VLOG("shaders changed so far: %d for NaN in min / max / saturate, %d for Arm erratum 3779215", atomic_load(&g_nanmm_n), atomic_load(&g_clampzero_n));
+    if (n % 1800 == 0 && (g_nanmm || g_clampzero || g_fmz)) VLOG("shaders changed so far: %d for NaN in min / max / saturate, %d for Arm erratum 3779215, %d for FMZ", atomic_load(&g_nanmm_n), atomic_load(&g_clampzero_n), atomic_load(&g_fmz_n));
     if (n % 300 == 0) { pso_evict(); vk_trim(); }   // (pipelines kept: Arm's driver, phones under 7.5 GB; empty device blocks given back)
     if (n % 300 == 0 && g_dsc_hits + g_dsc_new) VLOG("present %llu: descriptor sets written %llu, reused %llu (%.0f %%)", (unsigned long long)n, (unsigned long long)g_dsc_new, (unsigned long long)g_dsc_hits, 100.0 * (double)g_dsc_hits / (double)(g_dsc_hits + g_dsc_new));
     if (n == 1 || n % 300 == 0) VLOG("present %llu: %llu render target sets (%llu kept the open pass, %llu passes begun), %llu draws so far; textures uploaded %llu (re-uploaded %llu, %.1f MB)%s", (unsigned long long)n, (unsigned long long)g_stat_passes, (unsigned long long)g_stat_rt_same, (unsigned long long)g_stat_begins,
