@@ -546,16 +546,16 @@ static dm_ovl_item *add(dm_ovl_item *it, int *n, int max, float cx, float cy, fl
     *o = (dm_ovl_item){ cx - r, cy - r, 2 * r, 2 * r, clampf(R, 0, 255) / 255.0f, clampf(G, 0, 255) / 255.0f, clampf(B, 0, 255) / 255.0f, clampf(a, 0, 1), shape, 0.1f, 0.4f, OVL_G_NONE, 0.5f, 0 };
     return o;
 }
-// a frosted-glass bubble (grey and see-through, so it sits on the game's picture instead of standing out from it): a soft shadow, a darker rim, the body,
+// a clear-glass bubble (a faint grey tint and a light rim, so it sits on the game's picture and what is under it keeps its colours): a soft shadow, a darker rim, the body,
 //   a faint shine, a thin light rim; the label on top. Pressed: lighter. lit: a control that is on (lock-on), a brighter frost
 static void bubble(dm_ovl_item *it, int *n, int max, const ctl *c, int on, int lit, float a) {
     float r = on ? c->r * 0.95f : c->r, x = c->cx, y = c->cy, th = g_h / 1080.0f;
     int g = lit ? 150 : 52; if (on) g += 60;
-    add(it, n, max, x, y + r * 0.05f, r * 1.02f, OVL_DISC, 0, 0, 0, 0.18f * a);
-    add(it, n, max, x, y, r, OVL_DISC, g / 2, g / 2, g / 2 + 2, 0.40f * a);
-    add(it, n, max, x, y, r * 0.90f, OVL_DISC, g, g + 2, g + 6, (on || lit ? 0.70f : 0.45f) * a);
+    add(it, n, max, x, y + r * 0.05f, r * 1.02f, OVL_DISC, 0, 0, 0, 0.08f * a);
+    add(it, n, max, x, y, r, OVL_DISC, g / 2, g / 2, g / 2 + 2, 0.14f * a);
+    add(it, n, max, x, y, r * 0.90f, OVL_DISC, g, g + 2, g + 6, (on || lit ? 0.40f : 0.18f) * a);   // (a light tint: what is under a button keeps its colours)
     add(it, n, max, x - r * 0.28f, y - r * 0.38f, r * 0.22f, OVL_DISC, 255, 255, 255, 0.10f * a);
-    dm_ovl_item *o = add(it, n, max, x, y, r * 0.90f, OVL_RING, 235, 236, 240, (on || lit ? 0.80f : 0.50f) * a); if (o) o->ring = clampf(2.4f * th / (r * 0.9f), 0.02f, 0.2f);
+    dm_ovl_item *o = add(it, n, max, x, y, r * 0.90f, OVL_RING, 235, 236, 240, (on || lit ? 0.85f : 0.60f) * a); if (o) o->ring = clampf(2.4f * th / (r * 0.9f), 0.02f, 0.2f);
     o = add(it, n, max, x, y, r, OVL_DISC, 0, 0, 0, 0); if (o) { o->glyph = c->glyph; o->gscale = c->glyph == OVL_G_ZL || c->glyph == OVL_G_ZR ? 0.62f : 0.55f; o->galpha = a; }
 }
 // the throw button: a Poké Ball as the game's HUD shows it (shadow, dark rim, red top half, white bottom half, a dark band, the white centre button), pressed = slightly smaller and brighter
@@ -588,11 +588,11 @@ static void back_button(dm_ovl_item *it, int *n, int max, const ctl *c, int on, 
 // the stick, in the same frosted grey: a faint base with a light ring and an inner ring, and a grey knob
 static void compass(dm_ovl_item *it, int *n, int max, float a, float g_stick_x, float g_stick_y, float g_knob_x, float g_knob_y, float r) {   // (base, knob, radius)
     float th = g_h / 1080.0f, kr = r * 0.42f;
-    add(it, n, max, g_stick_x, g_stick_y, r, OVL_DISC, 40, 42, 46, 0.28f * a);
+    add(it, n, max, g_stick_x, g_stick_y, r, OVL_DISC, 40, 42, 46, 0.12f * a);
     dm_ovl_item *o = add(it, n, max, g_stick_x, g_stick_y, r, OVL_RING, 235, 236, 240, 0.50f * a); if (o) o->ring = clampf(2.4f * th / r, 0.01f, 0.2f);
     o = add(it, n, max, g_stick_x, g_stick_y, r * 0.80f, OVL_RING, 235, 236, 240, 0.18f * a); if (o) o->ring = clampf(1.6f * th / (r * 0.8f), 0.01f, 0.2f);
     add(it, n, max, g_knob_x, g_knob_y + kr * 0.10f, kr, OVL_DISC, 0, 0, 0, 0.18f * a);
-    add(it, n, max, g_knob_x, g_knob_y, kr, OVL_DISC, 120, 122, 128, 0.62f * a);
+    add(it, n, max, g_knob_x, g_knob_y, kr, OVL_DISC, 120, 122, 128, 0.40f * a);
     add(it, n, max, g_knob_x, g_knob_y - kr * 0.30f, kr * 0.6f, OVL_DISC, 255, 255, 255, 0.10f * a);
     o = add(it, n, max, g_knob_x, g_knob_y, kr, OVL_RING, 240, 240, 245, 0.75f * a); if (o) o->ring = clampf(2.2f * th / kr, 0.02f, 0.3f);
 }
