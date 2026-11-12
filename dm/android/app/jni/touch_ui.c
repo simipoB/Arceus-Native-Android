@@ -44,6 +44,11 @@ static float g_rknob_x, g_rknob_y; static int g_rstick_on;
 static double g_inner_t;   // the last touch of the D-pad or the right stick   // the right stick: its base stays put, the knob follows the thumb
 static int g_visible = 1;
 static int g_edit;   // the layout editor is on (touch_ui_event, front_overlay)
+// Touch gestures in the world (DM_TOUCH_GESTURES=off, Controls -> Touch controls; on by default): a tap = A, quick swipes (up = throw, left / right = L / R, down = X),
+//   taps on the HUD's hints, a two-finger tap = B, and the item selector's taps and swipes. Off: the screen only turns the camera and the controls do the rest
+//   (players opened menus by accident while turning the camera, Arceus-Native-Android#5). Menus already open still take taps and swipes. -1: not read yet
+static int g_field_gest = -1;
+static int field_gest(void) { if (g_field_gest < 0) { const char *e = getenv("DM_TOUCH_GESTURES"); g_field_gest = !(e && !strcmp(e, "off")); } return g_field_gest; }
 static double g_touch_t; static double g_two_t, g_tap_mute;   // two-finger tap: when the second finger landed; single taps ignored until g_tap_mute
 int touch_menu_active(void);   // touch_menu.c: one of the game's menus shows
 int touch_menu_map(void);   // touch_menu.c: the map is open (a drag pans it, a pinch zooms)
@@ -187,7 +192,7 @@ static int menu_back(float x, float y) {
 static int target_at(float x, float y) {
     // a touch right on a button (its drawn size) is that button first: with the picture at 20:9 or filling the screen, the game's selector zone below lies under
     //   A and B (at 16:9 it sits left of them), and their taps went to the selector's gestures instead
-    if (GESTURES_ON && !touch_menu_active() && sel_part(x, y) >= 0) { for (int c = C_A; c < NCTL; c++) if (c != C_SEL && hit(c, x, y, 1.0f)) return c; return C_SEL; }   // on the game's selector: its own gestures (touch_ui_event); not over a menu, where its flick up (ZR) would switch the menu's tab
+    if (GESTURES_ON && field_gest() && !touch_menu_active() && sel_part(x, y) >= 0) { for (int c = C_A; c < NCTL; c++) if (c != C_SEL && hit(c, x, y, 1.0f)) return c; return C_SEL; }   // on the game's selector: its own gestures (touch_ui_event); not over a menu, where its flick up (ZR) would switch the menu's tab
     int menu = GESTURES_ON && touch_menu_active();   // a menu open: every control works as in the field (the ball aside); a touch off them taps the menu's items
     if (hit(C_RSTICK, x, y, menu ? 1.0f : 1.3f)) return C_RSTICK;
     for (int c = C_A; c < NCTL; c++) if (!(menu && (c == C_THROW || c == C_LOCK)) && hit(c, x, y, c == C_BACK ? 2.5f : menu ? 1.0f : 1.3f)) return c;   // thumbs miss: touch areas 1.3 times the drawing (the small back button 2.5; in menus the drawing, so items beside them stay tappable)
@@ -468,13 +473,13 @@ void touch_ui_event(const AInputEvent *e, float w, float h, uint64_t *btn, int32
         for (int i = 0; i < 10; i++) if (g_ptr[i].id == id && (g_ptr[i].target == C_CAM || (g_ptr[i].target == C_STICK && !touch_menu_active())) && !g_ptr[i].thr && now_s() - g_ptr[i].t0 < 0.3 &&
                                          fabsf(g_ptr[i].x - g_ptr[i].x0) < g_h * 0.02f && fabsf(g_ptr[i].y - g_ptr[i].y0) < g_h * 0.02f) {
             double t = now_s();
-            if (t - g_two_t < 0.4) { g_two_t = 0; g_tap_mute = t + 0.3; if (g_aim) { g_aim = 0; for (int j = 0; j < 10; j++) g_ptr[j].aim = 0; fprintf(stderr, "[touch] aim cancelled\n"); }   // two fingers: B, and no throw
+            if (t - g_two_t < 0.4 && (field_gest() || touch_menu_active())) { g_two_t = 0; g_tap_mute = t + 0.3; if (g_aim) { g_aim = 0; for (int j = 0; j < 10; j++) g_ptr[j].aim = 0; fprintf(stderr, "[touch] aim cancelled\n"); }   // two fingers: B, and no throw
                 dm_input_press(DM_BTN_B, 80000000ull); click_locked(); }
             else if (t >= g_tap_mute && !g_ptr[i].lp) { static int dg = -1; if (dg < 0) dg = getenv("DM_TOUCH_DIAG") != NULL; if (dg && !touch_menu_active()) touch_menu_tap(g_ptr[i].x0, g_ptr[i].y0, g_w, g_h);   // (diagnosis: what is under the tap)
-                uint64_t hb = GESTURES && !touch_menu_active() && !touch_menu_cutscene() ? hud_hint(g_ptr[i].x0, g_ptr[i].y0) : 0;
+                uint64_t hb = GESTURES && field_gest() && !touch_menu_active() && !touch_menu_cutscene() ? hud_hint(g_ptr[i].x0, g_ptr[i].y0) : 0;
                 if (hb) { dm_input_press_frames(hb, 150000000ull, 4); click_locked(); static int nh; if (nh++ < 20) fprintf(stderr, "[touch] HUD hint %s\n", hb == DM_BTN_UP ? "up" : hb == DM_BTN_DOWN ? "down" : "minus"); }
                 else if (touch_menu_active() && menu_back(g_ptr[i].x0, g_ptr[i].y0)) { touch_menu_back(); click_locked(); }
-                else if (touch_menu_active()) touch_menu_tap(g_ptr[i].x0, g_ptr[i].y0, g_w, g_h); else if (GESTURES && g_ptr[i].target == C_CAM) { dm_input_press(DM_BTN_A, 80000000ull); click_locked(); } }
+                else if (touch_menu_active()) touch_menu_tap(g_ptr[i].x0, g_ptr[i].y0, g_w, g_h); else if (GESTURES && field_gest() && g_ptr[i].target == C_CAM) { dm_input_press(DM_BTN_A, 80000000ull); click_locked(); } }
         }
         // swipes on an open menu (outside the controls): left / right move across its list, one item per 0.08 of the screen height travelled (finger left =
         // the next one to the right); up / down scroll it with the right stick while the finger is down (recompute_locked)
@@ -497,7 +502,7 @@ void touch_ui_event(const AInputEvent *e, float w, float h, uint64_t *btn, int32
             if (sb) { dm_input_press_frames(sb, 150000000ull, 4); click_locked(); static int nl; if (nl++ < 20) fprintf(stderr, "[touch] selector %s\n", sb == DM_BTN_L ? "L" : sb == DM_BTN_R ? "R" : sb == DM_BTN_X ? "X" : "ZR"); }
         }
         // quick swipes on the camera side (under 0.35 s, a tenth of the screen height or more): left / right = L / R (the item or Pokémon), down = X (items / Pokémon)
-        for (int i = 0; i < 10; i++) if (GESTURES && g_ptr[i].id == id && g_ptr[i].target == C_CAM && !g_ptr[i].thr && !g_ptr[i].lp && now_s() - g_ptr[i].t0 < 0.35 && !touch_menu_active()) {
+        for (int i = 0; i < 10; i++) if (GESTURES && field_gest() && g_ptr[i].id == id && g_ptr[i].target == C_CAM && !g_ptr[i].thr && !g_ptr[i].lp && now_s() - g_ptr[i].t0 < 0.35 && !touch_menu_active()) {
             float sx = g_ptr[i].x - g_ptr[i].x0, sy = g_ptr[i].y - g_ptr[i].y0; uint64_t sb = 0;
             if (fabsf(sx) > g_h * 0.10f && fabsf(sy) < fabsf(sx) * 0.6f) sb = sx > 0 ? DM_BTN_R : DM_BTN_L;
             else if (sy > g_h * 0.10f && fabsf(sx) < sy * 0.6f) sb = DM_BTN_X;
@@ -511,7 +516,7 @@ void touch_ui_event(const AInputEvent *e, float w, float h, uint64_t *btn, int32
             int32_t id = AMotionEvent_getPointerId(e, k);
             for (int i = 0; i < 10; i++) if (g_ptr[i].id == id) {
                 g_ptr[i].x = AMotionEvent_getX(e, k); g_ptr[i].y = AMotionEvent_getY(e, k);
-                if (g_ptr[i].target == C_CAM && !g_ptr[i].thr && act == AMOTION_EVENT_ACTION_MOVE && GESTURES && now_s() - g_ptr[i].t0 < 0.3 && !touch_menu_active()) {   // a quick swipe up: a throw
+                if (g_ptr[i].target == C_CAM && !g_ptr[i].thr && act == AMOTION_EVENT_ACTION_MOVE && GESTURES && field_gest() && now_s() - g_ptr[i].t0 < 0.3 && !touch_menu_active()) {   // a quick swipe up: a throw
                     float up = g_ptr[i].y0 - g_ptr[i].y; if (up > g_h * 0.10f && fabsf(g_ptr[i].x - g_ptr[i].x0) < up * 0.5f) { g_ptr[i].thr = 1; g_cam_vx = g_cam_vy = 0; click_locked(); }
                 }
                 if ((g_ptr[i].target == C_CAM || g_ptr[i].target == C_THROW) && !g_ptr[i].thr && act == AMOTION_EVENT_ACTION_MOVE) {   // the finger's speed, smoothed (the throw button's finger aims)
@@ -624,6 +629,7 @@ void touch_ui_setting(const char *key, const char *value) {
     pthread_mutex_lock(&g_mu);
     if (!strcmp(key, "DM_TOUCH_OPACITY")) g_opacity = value ? clampf((float)atof(value) / 100.0f, 0.2f, 1.0f) : 1.0f;
     else if (!strcmp(key, "DM_TOUCH_FADE")) g_fade = value ? fmaxf(0.0f, (float)atof(value)) : 3.0f;
+    else if (!strcmp(key, "DM_TOUCH_GESTURES")) g_field_gest = !(value && !strcmp(value, "off"));
     else if (!strcmp(key, "DM_TOUCH_SIZE")) { float v = value ? (float)atof(value) : 100.0f; g_size = (v < 80 || v > 130 ? 100.0f : v) / 100.0f; g_w = g_h = 0; }   // (laid out again at the next frame)
     else if (!strcmp(key, "DM_TOUCH_L3R3")) { g_l3r3 = value && !strcmp(value, "on"); g_w = g_h = 0; }   // (laid out again on the next frame)
 #ifdef __ANDROID__
