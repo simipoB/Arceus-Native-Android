@@ -1643,6 +1643,7 @@ static uint32_t *g_arc_step;
 static void arc_step(uint64_t frame_ns) {
     static int init; if (!init) { init = 1;
         const char *e = getenv("DM_FPS_TARGET"); if (!e || atoi(e) < 60) return;
+        if (dyn_on()) { LOG("60 fps: the built-in Dynamic FPS sets the game's frame time"); return; }   // (Fl4sh's mod writes the same place itself, loader.c)
         module_t *m = NULL; for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main")) m = &g_mod[i];
         if (!m || strncasecmp(m->build_id, "aee8f150dda1b5a838806e1a5ea6827a", 32) || m->size < 0x397e8dc) {   // (the build id may come in capitals)
             LOG("[RED] 60 fps: not Legends: Arceus 1.1.1's main (build %s): the game's frame time left alone", m ? m->build_id : "-"); return; }

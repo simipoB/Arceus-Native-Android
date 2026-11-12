@@ -285,7 +285,14 @@ public final class GameMenu {
         if (GameSettings.arceus(a)) choice(a, "DM_LOWSPEC", t(a, "Lower specs"), new String[][] { { "", t(a, "Auto"), t(a, "Auto: this phone gets %s", t(a, p[8].isEmpty() ? "Off" : "On")) },
             { "0", t(a, "Off"), t(a, "Off: the world as the game draws it") },
             { "1", t(a, "On"), t(a, "On: shorter draw distance for Pokémon, people and trees, lighter shadows") }, { "2", t(a, "Lowest"), t(a, "Lowest: shorter draw distance and no shadows") } });
-        if (GameSettings.has60(a)) choice(a, "DM_FPS_TARGET", t(a, "Frame rate"), new String[][] { { "", t(a, "Auto"), t(a, "Auto: this phone gets %s fps", GameSettings.arceus(a) ? "30" : p[5]) },
+        if (GameSettings.arceus(a)) choice(a, "DM_ARC_FAR", t(a, "Draw distance"), new String[][] { { "", t(a, "Normal"), t(a, "Normal: as the game draws it") },
+            { "1", t(a, "Far"), t(a, "Far: Pokémon, people and trees much further away, sharper textures; heavier on the GPU, not with Lower specs (Fl4sh's Level of Detail mod)") } });
+        if (GameSettings.arceus(a)) choice(a, "DM_ARC_STAMINA", t(a, "Unlimited stamina"), new String[][] { { "", t(a, "Off"), t(a, "Off: running and riding tire you as usual") },
+            { "1", t(a, "On"), t(a, "On: run and ride without tiring") } });
+        if (GameSettings.arceus(a)) choice(a, "DM_ARC_NOBARS", t(a, "Black bars in battle"), new String[][] { { "", t(a, "On"), t(a, "On: as the game shows battles") },
+            { "1", t(a, "Off"), t(a, "Off: battles use the whole screen") } });
+        if (GameSettings.has60(a)) choice(a, "DM_FPS_TARGET", t(a, "Frame rate"), new String[][] { { "", t(a, "Auto"), (GameSettings.arceus(a) ? (p[5].equals("60") ? t(a, "Auto: 30 to 60 fps as the phone can, game speed stays right (Fl4sh's Dynamic FPS mod)") : t(a, "Auto: this phone gets %s fps", "30"))
+                                                          : t(a, "Auto: this phone gets %s fps", p[5])) },
             { "30", "30 fps", t(a, "30 fps, as the game is made") }, { "60", "60 fps", GameSettings.paldea(a) ? t(a, "Up to 60 fps: faster where the phone can, game speed stays right (Fl4sh's Dynamic FPS mod)")
                                                                                                : t(a, "60 fps: smoother; drops to 720p when needed to hold 60 (with Graphics on Auto or Adaptive)") } });
         if (GameActivity.sustainedSupported(a)) choice(a, "DM_SUSTAINED", t(a, "Sustained performance"), new String[][] {
