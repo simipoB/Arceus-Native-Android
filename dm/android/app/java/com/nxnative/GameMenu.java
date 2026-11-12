@@ -304,6 +304,9 @@ public final class GameMenu {
         action(a, t(a, "Remap controller buttons"), t(a, "Or hold − for 3 s on a controller. Hold − and + together for 1 s to open this menu."), () -> go("remap"));
         choice(a, "DM_RUMBLE", t(a, "Rumble"), new String[][] { { "", t(a, "On"), t(a, "On: the controller's motor, else the phone's") }, { "pad", t(a, "Controllers only"), "" },
                                                                  { "off", t(a, "Off"), "" } });
+        // the left stick / movement, touch and controller alike (hle_hid.c lsens): full speed with less of the stick (Arceus-Native-Android#9: running needs a near-full push)
+        choice(a, "DM_LSTICK_SENS", t(a, "Movement stick sensitivity"), new String[][] { { "", "100 %", t(a, "As on the Switch") }, { "125", "125 %", "" },
+            { "150", "150 %", t(a, "Full speed (and running) with less of the stick") }, { "175", "175 %", "" }, { "200", "200 %", "" } });
         // the right stick / camera, touch and controller alike (hle_hid.c rsens)
         choice(a, "DM_RSTICK_SENS", t(a, "Camera sensitivity"), new String[][] { { "50", "50 %", t(a, "Slower camera: the right stick and the touch camera turn less") }, { "75", "75 %", "" },
             { "", "100 %", t(a, "As on the Switch") }, { "125", "125 %", "" }, { "150", "150 %", t(a, "Faster camera: full speed with less of the stick") }, { "200", "200 %", "" } });

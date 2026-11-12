@@ -39,8 +39,20 @@ static int32_t rsens(int32_t v) {
     if (p == 100) return v;
     int64_t s = (int64_t)v * p / 100; return (int32_t)(s > 32767 ? 32767 : s < -32767 ? -32767 : s);
 }
+// Left stick (movement) sensitivity (DM_LSTICK_SENS, the in-game menu: 100 to 200, 100 by default): the stick's push scaled along its own direction, so full speed comes
+//   with less of it (Legends: Arceus runs only near a full push: with a controller whose stick stops short of it, or a finger short of the touch stick's rim, the player
+//   dropped back to walking, Arceus-Native-Android#9). The touch stick and a controller's alike
+_Atomic int dm_lstick_pct = -1;   // -1: not read yet (android_main.c sets it from the menu)
+static void lsens(int32_t *x, int32_t *y) {
+    int p = atomic_load(&dm_lstick_pct);
+    if (p < 0) { const char *e = getenv("DM_LSTICK_SENS"); p = e ? atoi(e) : 100; if (p < 50 || p > 300) p = 100; atomic_store(&dm_lstick_pct, p); }
+    if (p == 100 || (!*x && !*y)) return;
+    double fx = *x * p / 100.0, fy = *y * p / 100.0, m = sqrt(fx * fx + fy * fy);
+    if (m > 32767.0) { fx *= 32767.0 / m; fy *= 32767.0 / m; }
+    *x = (int32_t)fx; *y = (int32_t)fy;
+}
 void dm_input_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
-    rx = rsens(rx); ry = rsens(ry);
+    rx = rsens(rx); ry = rsens(ry); lsens(&lx, &ly);
     uint64_t old = atomic_exchange(&g_btn, buttons); atomic_fetch_or(&g_latch, buttons & ~old); atomic_store(&g_axes, pack(lx, ly, rx, ry));
 }
 // Gyro aiming (DM_GYRO: "aim" = while ZL is held, as the game aims; "on" = always; off by default): the phone's gyroscope turns the camera, added to the right stick
@@ -56,7 +68,7 @@ static int32_t gyro_axis(float r) {
 }
 void dm_gyro_set(float yaw, float pitch) { atomic_store(&g_gyro, pack(0, 0, gyro_axis(yaw), gyro_axis(pitch))); atomic_store(&g_gyro_t, now_ns()); }
 void dm_pad_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
-    rx = rsens(rx); ry = rsens(ry);
+    rx = rsens(rx); ry = rsens(ry); lsens(&lx, &ly);
     uint64_t old = atomic_exchange(&g_pad_btn, buttons); atomic_fetch_or(&g_pad_latch, buttons & ~old); atomic_store(&g_pad_axes, pack(lx, ly, rx, ry));
 }
 // Timed presses from the host itself (the Android touch menu driver, touch_menu.c): buttons held until the given time, ORed with the other sources

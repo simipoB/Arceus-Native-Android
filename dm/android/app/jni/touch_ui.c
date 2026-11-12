@@ -142,6 +142,10 @@ static void layout(float w, float h) {
         g_c[C_X] = (ctl){ fx, fy - gap, br, OVL_G_X, 1, DM_BTN_X }; g_c[C_Y] = (ctl){ fx - gap, fy, br, OVL_G_Y, 1, DM_BTN_Y }; }
     if (!g_rstick_on) { g_rknob_x = g_c[C_RSTICK].cx; g_rknob_y = g_c[C_RSTICK].cy; }
     layout_apply(w, h);
+    // L3 / R3 not placed by the player follow their stick where the player put it (they sat above the sticks' default places: with a stick moved, its button stayed behind,
+    //   under other controls, Arceus-Native-Android#9)
+    if (!g_ov[C_L3].set) { g_c[C_L3].cx = g_c[C_STICK].cx; g_c[C_L3].cy = clampf(g_c[C_STICK].cy - 0.22f * s, g_c[C_L3].r, h - g_c[C_L3].r); }
+    if (!g_ov[C_R3].set) { g_c[C_R3].cx = g_c[C_RSTICK].cx; g_c[C_R3].cy = clampf(g_c[C_RSTICK].cy - 0.21f * s, g_c[C_R3].r, h - g_c[C_R3].r); }
     { float k = size_k(); if (k != 1.0f) for (int c = 0; c < NCTL; c++) if (c != C_CAM && c != C_SEL && c != C_BACK) {
         g_c[c].r *= k; g_c[c].cx = clampf(g_c[c].cx, g_c[c].r, w - g_c[c].r); g_c[c].cy = clampf(g_c[c].cy, g_c[c].r, h - g_c[c].r); } }
     if (!l3r3_on()) g_c[C_L3].shown = g_c[C_R3].shown = 0;   // (an option, off by default: the layout editor's own choice only counts while it is on)
