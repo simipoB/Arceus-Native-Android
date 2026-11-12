@@ -1785,6 +1785,20 @@ static void bc_convert(int kind, int etk, const uint8_t *src, size_t pitch, size
 // CPU-filled texture upload: deswizzled level by level / layer by layer into staging (the submission's arena, else a one-off buffer), copied into the image in the upload command buffer
 // Time spent here (the long-frame line's upload ms: mtl_upload_ns_take) and in the deswizzle / copy part of it; one upload over 20 ms is logged with its size and split
 static _Atomic uint64_t g_upload_ns;
+// The upload worker's batch (pre_main): the textures it uploads ahead are recorded into one one-off command buffer and submitted and waited for once (pre_batch_end),
+//   not one submission and one wait each. A wait is for everything queued before it, about a frame of GPU work: 20-30 ms a texture whatever its size (a 12x12 one took
+//   29.8 ms on a Mali-G615 with PanVK, 21 ms on a Galaxy S25+), so the worker managed about 40 textures a second, and a new area's hundreds were drawn before it got to
+//   them: uploaded inside the frame instead, frames of 100 ms and more. Each texture's staging buffer is kept until the batch is done. DM_VK_PRE_BATCH=1: one each
+enum { PRE_BATCH = 16 };
+typedef struct { VkCommandBuffer cb; int n; VkDeviceSize bytes; struct { VkBuffer b; vmalloc_t a; } st[PRE_BATCH]; } pre_batch;
+static __thread pre_batch *t_batch;
+static _Atomic uint64_t g_pre_batches;
+static void pre_batch_end(void) {
+    pre_batch *b = t_batch; if (!b || !b->cb) return;
+    once_end(b->cb); atomic_fetch_add(&g_pre_batches, 1);
+    for (int i = 0; i < b->n; i++) { vkDestroyBuffer(g_dev, b->st[i].b, NULL); vk_free(b->st[i].a); }
+    b->cb = VK_NULL_HANDLE; b->n = 0; b->bytes = 0;
+}
 static int tex_upload_(vtex *x, const tex_t *t, uint64_t *copy_ns);
 static int tex_upload(vtex *x, const tex_t *t) {
     uint64_t t0 = mono_ns(), cn = 0; int r = tex_upload_(x, t, &cn); uint64_t dt = mono_ns() - t0;
@@ -1816,7 +1830,9 @@ static int tex_upload_(vtex *x, const tex_t *t, uint64_t *copy_ns) {
     static int vkind = -100, vleft = 8; if (vkind == -100) { const char *e = getenv("DM_VK_BC_GPU_VERIFY"); vkind = e && *e ? atoi(e) : 0; }
     int vfy = vkind && bck == vkind && !etk && (g_bcgpu & 1) && bc_gpu_can(bck, 0) && !x->is3d && vleft > 0; if (vfy) vleft--;
     VkBuffer vb = VK_NULL_HANDLE; vmalloc_t vm = {0}; uint8_t *vexp = NULL, *vdone = vfy ? calloc(x->levels * layers, 1) : NULL;
-    VkCommandBuffer cb = vfy ? NULL : ucb(); int once = !cb; if (once) cb = once_begin();
+    VkCommandBuffer cb = vfy ? NULL : ucb(); int once = !cb, batched = once && !vfy && t_batch && t_batch->n < PRE_BATCH;
+    if (batched) { if (!t_batch->cb) t_batch->cb = once_begin(); cb = t_batch->cb; }
+    else if (once) { pre_batch_end(); cb = once_begin(); }   // (a batch open on this thread holds the one-off lock: it goes first)
     if (vfy) { VkBufferCreateInfo bi = { .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = total ? total : 16, .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT }; VKCHECK(vkCreateBuffer(g_dev, &bi, NULL, &vb));
         VkMemoryRequirements rq; vkGetBufferMemoryRequirements(g_dev, vb, &rq); vm = vk_alloc(rq, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 1);
         VKCHECK(vkBindBufferMemory(g_dev, vb, vm.b->mem, vm.off)); vexp = calloc(1, total ? total : 16); memset((uint8_t *)vm.b->map + vm.off, 0xcd, total); }
@@ -1858,7 +1874,8 @@ static int tex_upload_(vtex *x, const tex_t *t, uint64_t *copy_ns) {
     free(scratch);
     if (nrg) vkCmdCopyBufferToImage(cb, sb, x->img, VK_IMAGE_LAYOUT_GENERAL, nrg, rg);
     free(rg); g_up_bytes += total;
-    if (once) { once_end(cb); vkDestroyBuffer(g_dev, sb, NULL); vk_free(tmp); }
+    if (batched) { t_batch->st[t_batch->n].b = sb; t_batch->st[t_batch->n].a = tmp; t_batch->n++; t_batch->bytes += total; }   // (submitted with the batch: pre_batch_end)
+    else if (once) { once_end(cb); vkDestroyBuffer(g_dev, sb, NULL); vk_free(tmp); }
     if (vfy) {   // texel by texel (8 bytes: RGBA16F), level by level, layer by layer, in the staging layout
         const uint8_t *got = (const uint8_t *)vm.b->map + vm.off; VkDeviceSize o = 0; int said = 0; unsigned long long bad = 0, all = 0;
         for (unsigned l = 0; l < x->levels; l++) { uint32_t w = x->w >> l ? x->w >> l : 1, h = x->h >> l ? x->h >> l : 1;
@@ -1913,19 +1930,32 @@ static long pre_budget(void) {
 static int pre_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_VK_PREUPLOAD"); v = !(e && !strcmp(e, "0")); VLOG("packaged textures: %s", v ? "uploaded ahead by a worker as the game creates them" : "uploaded at their first use (DM_VK_PREUPLOAD=0)"); } return v; }
 static void *pre_main(void *unused) {
     (void)unused; setpriority(PRIO_PROCESS, (id_t)gettid(), 4);   // (below the game's threads: it only saves them work)
+    static pre_batch batch; const char *pb = getenv("DM_VK_PRE_BATCH"); int per = pb ? atoi(pb) : PRE_BATCH; if (per < 1) per = 1; if (per > PRE_BATCH) per = PRE_BATCH;
+    if (per > 1) t_batch = &batch;
+    VLOG("packaged textures: the worker uploads up to %d in one submission (DM_VK_PRE_BATCH)", per);
+    static struct { tex_t c; vtex *x; } done[PRE_BATCH];
     for (;;) {
-        pthread_mutex_lock(&g_pre_mu);
-        while (g_pre_tail == g_pre_head) pthread_cond_wait(&g_pre_cv, &g_pre_mu);
-        tex_t c = g_pre[g_pre_tail++ % PRE_N];
-        pthread_mutex_unlock(&g_pre_mu);
-        pthread_mutex_lock(&g_smu); int want = nvn_hm_get(&g_tex_live, &c.serial) && !serial_get(c.serial); pthread_mutex_unlock(&g_smu);
-        if (!want) { atomic_fetch_add(&g_pre_late, 1); continue; }   // (released, or already uploaded by its first use)
-        if (atomic_load(&g_pre_unused) + (long)c.L.size > pre_budget()) { atomic_fetch_add(&g_pre_full, 1); continue; }   // (over the budget: its first use uploads it)
-        vtex *x = pkg_upload(&c); if (!x) continue;
-        pthread_mutex_lock(&g_smu);
-        if (nvn_hm_get(&g_tex_live, &c.serial) && !serial_get(c.serial)) { atomic_store(&x->pre, 1); atomic_fetch_add(&g_pre_unused, (long)x->a.size); serial_put(c.serial, x); atomic_fetch_add(&g_pre_done, 1); g_pkg_uploads++; }
-        else atomic_fetch_add(&g_pre_late, 1);
-        pthread_mutex_unlock(&g_smu); vtex_unref(x);
+        int nd = 0; uint64_t t0 = 0; long pend = 0;
+        for (;;) {   // a batch: what is queued now, up to `per` textures, 16 MB of staging or 8 ms of work; the first one is waited for
+            pthread_mutex_lock(&g_pre_mu);
+            if (!nd) while (g_pre_tail == g_pre_head) pthread_cond_wait(&g_pre_cv, &g_pre_mu);
+            else if (g_pre_tail == g_pre_head) { pthread_mutex_unlock(&g_pre_mu); break; }
+            tex_t c = g_pre[g_pre_tail++ % PRE_N];
+            pthread_mutex_unlock(&g_pre_mu);
+            pthread_mutex_lock(&g_smu); int want = nvn_hm_get(&g_tex_live, &c.serial) && !serial_get(c.serial); pthread_mutex_unlock(&g_smu);
+            if (!want) { atomic_fetch_add(&g_pre_late, 1); continue; }   // (released, or already uploaded by its first use)
+            if (atomic_load(&g_pre_unused) + pend + (long)c.L.size > pre_budget()) { atomic_fetch_add(&g_pre_full, 1); continue; }   // (over the budget: its first use uploads it)
+            vtex *x = pkg_upload(&c); if (!x) continue;
+            if (!nd) t0 = mono_ns();
+            done[nd].c = c; done[nd].x = x; nd++; pend += (long)x->a.size;
+            if (nd >= per || batch.n >= PRE_BATCH || batch.bytes >= (16u << 20) || mono_ns() - t0 > 8000000ull) break;
+        }
+        pre_batch_end();   // (one submission, one wait: the GPU holds all of them now)
+        for (int i = 0; i < nd; i++) { vtex *x = done[i].x; const tex_t *c = &done[i].c;
+            pthread_mutex_lock(&g_smu);
+            if (nvn_hm_get(&g_tex_live, &c->serial) && !serial_get(c->serial)) { atomic_store(&x->pre, 1); atomic_fetch_add(&g_pre_unused, (long)x->a.size); serial_put(c->serial, x); atomic_fetch_add(&g_pre_done, 1); g_pkg_uploads++; }
+            else atomic_fetch_add(&g_pre_late, 1);
+            pthread_mutex_unlock(&g_smu); vtex_unref(x); }
     }
     return NULL;
 }
@@ -5017,7 +5047,7 @@ uint64_t mtl_present(const tex_t *t, double period_s, const int crop[4]) {
         pthread_t t; void *saver(void *a); if (pthread_create(&t, NULL, saver, &busy)) atomic_store(&busy, 0); else pthread_detach(t); } }
     if (n % 1800 == 0) { VLOG("pipelines built during play so far: %d", atomic_load(&g_pso_ingame)); mem_report(); }
     if ((n == 1 || n % 300 == 0) && atomic_load(&g_pre_done) + atomic_load(&g_pre_late) + atomic_load(&g_pre_full))
-        VLOG("textures uploaded ahead %llu (%ld MB of them not drawn yet), used before the worker got to them %llu, left to their first use (budget or queue full) %llu", (unsigned long long)atomic_load(&g_pre_done), atomic_load(&g_pre_unused) >> 20, (unsigned long long)atomic_load(&g_pre_late), (unsigned long long)atomic_load(&g_pre_full));
+        VLOG("textures uploaded ahead %llu in %llu submissions (%ld MB of them not drawn yet), used before the worker got to them %llu, left to their first use (budget or queue full) %llu", (unsigned long long)atomic_load(&g_pre_done), (unsigned long long)atomic_load(&g_pre_batches), atomic_load(&g_pre_unused) >> 20, (unsigned long long)atomic_load(&g_pre_late), (unsigned long long)atomic_load(&g_pre_full));
     if (n % 300 == 0 && (sk_on() || ubd_on() || barrier_relaxed()))
         VLOG("present %llu: barriers before passes full %llu / narrowed %llu / left out %llu; uniform updates deferred in a pass %llu (passes ended to land them %llu); "
              "stores skipped %llu (read after all %llu), depth / stencil begun store-none %llu (written after all %llu)", (unsigned long long)n,
