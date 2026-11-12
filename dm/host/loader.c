@@ -495,61 +495,33 @@ static int fps_patch(module_t *m, uint64_t lim, int64_t p0, int64_t p1);
 // "Dynamic FPS": up to 60, the game's step from the time each frame really took) with DM_FPS_TARGET=60, their 2048×2048 shadow maps (Fl4sh's "2K Shadows") with
 // DM_SHADOWS=2k. A mod goes in whole or not at all: every site must still hold the game's own bytes and none may be code the rewriter turned into a branch
 #include "builtin_mods.h"
-#include "builtin_mods_arceus.h"   // (Legends: Arceus 1.1.1's, from its own main: Fl4sh's Dynamic FPS)
-static int bmod_wanted(const char *name, int arceus) {
-    if (arceus && !strcmp(name, "dynamic_fps")) { const char *e = getenv("DM_ARC_DYNFPS"); return e && atoi(e); }   // (Legends: Arceus: Frame rate on Auto, android_main.c; its 60 is a fixed 60)
+static int bmod_wanted(const char *name) {
     if (!strcmp(name, "dynamic_fps")) { const char *e = getenv("DM_FPS_TARGET"); return e && atoi(e) >= 60; }
     if (!strcmp(name, "shadows_2k")) { const char *e = getenv("DM_SHADOWS"); return e && !strcasecmp(e, "2k"); }   // (test only: not offered in the menu)
     return 0;
 }
 static int g_bmod_fps;   // the frame rate came from a built-in mod: the Sword / Shield patch below is not this game's
-// A mod that keeps its own state next to its code (Legends: Arceus' Dynamic FPS writes main+0x26fc498..0x26fc500, inside its code at main+0x26fc3fc: fine in the
-//   emulators it was made for, a crash where code pages are read-only): those pages are made writable as well as executable once the text is protected
-//   (load_module). Only when this system lets an app do that at all, tried on a scratch page first; otherwise the mod is left out
-static uint32_t g_bmod_rwx_lo, g_bmod_rwx_hi;
-static int rwx_allowed(void) {
-    static int v = -1; if (v >= 0) return v;
-    void *t = mmap(NULL, 0x4000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); v = 0;
-    if (t != MAP_FAILED) { v = !mprotect(t, 0x4000, PROT_READ | PROT_WRITE | PROT_EXEC); munmap(t, 0x4000); }
-    return v;
-}
-
 int dm_dynfps;   // hle_nvn.c dyn_tick: Scarlet / Violet's Dynamic FPS is in, presentation is paced in steps of 30 / 60
 static int bmod_apply(module_t *m, uint64_t lim, int64_t p0, int64_t p1) {
     int total = 0;
-    static const struct { const bmod *t; unsigned n; } tabs[] = { { BUILTIN_MODS, sizeof BUILTIN_MODS / sizeof *BUILTIN_MODS }, { BUILTIN_MODS_ARCEUS, sizeof BUILTIN_MODS_ARCEUS / sizeof *BUILTIN_MODS_ARCEUS } };
-    for (unsigned ti = 0; ti < sizeof tabs / sizeof *tabs; ti++)
-    for (unsigned i = 0; i < tabs[ti].n; i++) {
-        const bmod *b = &tabs[ti].t[i]; int hit = 0;
+    for (unsigned i = 0; i < sizeof BUILTIN_MODS / sizeof *BUILTIN_MODS; i++) {
+        const bmod *b = &BUILTIN_MODS[i]; int hit = 0;
         for (int k = 0; b->builds[k]; k++) if (!strncasecmp(m->build_id, b->builds[k], 32)) hit = 1;
-        if (!hit || !bmod_wanted(b->name, tabs[ti].t == BUILTIN_MODS_ARCEUS)) continue;
+        if (!hit || !bmod_wanted(b->name)) continue;
         int bad = -1;
         for (int s = 0; s < b->n && bad < 0; s++) { const bmod_site *t = &b->sites[s];
             if ((uint64_t)t->off + t->len > lim || memcmp(m->base + t->off, t->orig, t->len) || overlaps_rewrite(m, t->off, t->len, p0, p1)) bad = s; }
         if (bad >= 0) { LOG("[RED] %s: built-in mod %s not applied: +%#x differs from the game's code or was rewritten", m->name, b->name, b->sites[bad].off); continue; }
-        int arc_dyn = tabs[ti].t == BUILTIN_MODS_ARCEUS && !strcmp(b->name, "dynamic_fps");   // (its state lives in its code pages: see g_bmod_rwx_lo)
-        if (arc_dyn && !rwx_allowed()) { LOG("[RED] %s: built-in mod %s not applied: it writes next to its code, and this system does not let code pages be written", m->name, b->name); continue; }
-        if (arc_dyn) { g_bmod_rwx_lo = 0x26fc3fc; g_bmod_rwx_hi = 0x26fc54c; }
         for (int s = 0; s < b->n; s++) memcpy(m->base + b->sites[s].off, b->sites[s].mod, b->sites[s].len);
         LOG("%s: built-in mod %s applied (%d sites)", m->name, b->name, b->n); total += b->n; if (!strcmp(b->name, "dynamic_fps")) g_bmod_fps = dm_dynfps = 1;
     }
     return total;
 }
-static void bmod_rwx(module_t *m) {   // (after the text is protected: the pages a built-in mod writes its state into, see g_bmod_rwx_lo)
-    if (!g_bmod_rwx_hi || strcmp(m->name, "main")) return;
-    uintptr_t lo = g_bmod_rwx_lo & ~0x3FFFu, hi = (g_bmod_rwx_hi + 0x3FFFu) & ~0x3FFFu;
-    if (mprotect(m->base + lo, hi - lo, PROT_READ | PROT_WRITE | PROT_EXEC)) die("%s: the built-in mod's pages +%#lx..+%#lx could not be made writable", m->name, (unsigned long)lo, (unsigned long)hi);
-    LOG("%s: +%#lx..+%#lx writable as well as executable (a built-in mod keeps its state there)", m->name, (unsigned long)lo, (unsigned long)hi);
-}
 static int builtin_patches(module_t *m, uint64_t lim, int64_t p0, int64_t p1, int modded) {
     (void)modded;
     if (strcmp(m->name, "main")) return 0;
     int n = bmod_apply(m, lim, p0, p1);
-    // Legends: Arceus 1.1.1 at 60 fps without its Dynamic FPS (a site rewritten or not the game's): a frame every refresh, its present interval 2 not followed, and
-    //   hle_nvn.c arc_step sets the frame time each frame instead
-    { const char *e = getenv("DM_FPS_TARGET");
-      if (!g_bmod_fps && e && atoi(e) >= 60 && !strncasecmp(m->build_id, "aee8f150dda1b5a838806e1a5ea6827a", 32)) { setenv("DM_PRESENT_INTERVAL", "display", 0); LOG("%s: 60 fps without the built-in Dynamic FPS: a frame every refresh, the frame time set by the host", m->name); } }
-    if (!strncasecmp(m->build_id, "aee8f150dda1b5a838806e1a5ea6827a", 32)) return n;   // (Legends: Arceus 1.1.1: its 60 is above, not the Sword / Shield patch)
+    if (!strncasecmp(m->build_id, "aee8f150dda1b5a838806e1a5ea6827a", 32)) return n;   // (Legends: Arceus 1.1.1: its 60 is hle_nvn.c arc_step, not the Sword / Shield patch)
     return n + (g_bmod_fps ? 0 : fps_patch(m, lim, p0, p1));
 }
 // Built-in: DM_FPS_TARGET=60..120 (opt-in, the in-game menu; experimental) for Pokémon Shield and Sword 1.3.2's main: the present interval the game asks NVN for, 2 (30 fps),
@@ -616,7 +588,6 @@ static void map_image(module_t *m, const char *dir) {
         install_key_page(m);
         uint64_t rx = (m->text_end + 0x3FFF) & ~0x3FFFull;
         if (mprotect(m->base, rx, PROT_READ | PROT_EXEC)) die("%s mprotect text", m->name);
-        bmod_rwx(m);
         if (modded) __builtin___clear_cache((char *)m->base, (char *)(m->base + rx));
         if (mprotect(a, m->patch_len, PROT_READ | PROT_EXEC)) die("%s mprotect patch", m->name);
         if (pre > m->patch_len && mprotect(a + m->patch_len, pre - m->patch_len, PROT_NONE)) die("%s mprotect gap", m->name);
@@ -630,7 +601,6 @@ static void map_image(module_t *m, const char *dir) {
     install_key_page(m);
     uint64_t rx = (m->text_end + 0x3FFF) & ~0x3FFFull;
     if (mprotect(m->base, rx, PROT_READ | PROT_EXEC)) die("%s mprotect text", m->name);
-    bmod_rwx(m);
     if (modded) __builtin___clear_cache((char *)m->base, (char *)(m->base + rx));
     uint64_t po = m->patch_off & ~0x3FFFull;
     if (mprotect(m->base + po, m->size - po, PROT_READ | PROT_EXEC)) die("%s mprotect patch", m->name);

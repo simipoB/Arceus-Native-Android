@@ -125,8 +125,6 @@ final class GameSettings {
         // 60 on top phones for Sword / Shield (held by the frame-rate guard, android_main.c graphics_auto); Scarlet / Violet stay at 30 unless chosen
         // Auto stays at the game's 30: at 60 the stadium crowd flickers (an animation counted in frames) and a heavy scene falls back to 720p; 60 is the player's choice
         String fps = AUTO_60 && !heavy && cpu == 2 && gpu == 2 && ram == 2 && displayDivides(c, 60) ? "60" : "30";
-        // Legends: Arceus: Auto is its Dynamic FPS (30 to 60, the game's speed right; android_main.c DM_ARC_DYNFPS) on a top Snapdragon (Adreno) phone; elsewhere 30
-        if (arceus(c) && n.equals("sd8") && cpu == 2 && ram == 2 && displayDivides(c, 60)) fps = "60";
         String scaler = gpu >= 1 ? "sgsr" : "sharp";
         String shadows = "";   // (2K shadow maps: removed from Auto and the menu at the owner's request; DM_SHADOWS=2k in env.txt still applies them, for testing)   // (SGSR's extra passes on a GPU with room for them; the cheaper Sharp on a low one)
         // Legends: Arceus' Lower specs (android_main.c lowspec: the POTATO mod's shorter draw distance and lighter shadows) on a phone with a low CPU or GPU, where its

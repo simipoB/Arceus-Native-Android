@@ -210,9 +210,6 @@ JNIEXPORT jboolean JNICALL Java_com_nxnative_GameMenu_nativeSetting(JNIEnv *env,
     if (!strcmp(k, "DM_BACKGROUND")) g_bg_off = v && !strcmp(v, "off");
     else if (!strcmp(k, "DM_FPS_TARGET")) {   // 30 / 60 at once with the live frame rate (the hold limit, the window's rate, the display pacing); otherwise the next start
         int t = v ? atoi(v) : 0; if (!v) { const char *a = getenv("DM_AUTO_FPS"); t = a && atoi(a) >= 60 ? 60 : 30; }   // (Auto: the phone profile's)
-#if DM_GAME_PROGRAM_ID == 0x01001F5010DFA000ull
-        t = 0;   // (Legends: Arceus: Auto's Dynamic FPS or not is decided as the game loads: the next start)
-#endif
         if (&dm_fps_live && __atomic_load_n(&dm_fps_live, __ATOMIC_RELAXED) && (t == 30 || t == 60)) {
             __atomic_store_n(&dm_fps_live, t, __ATOMIC_RELAXED); window_rate(atomic_load(&g_window));
             fprintf(stderr, "frame rate: %d fps, switched while playing\n", t);
@@ -507,9 +504,7 @@ static void device_profile(void) {
         const char *at = getenv("DM_AUTO_TEX"), *aa = getenv("DM_AUTO_ANISO"), *af = getenv("DM_AUTO_FPS");
         setenv("DM_GRAPHICS", ag, 0); if (aa) setenv("DM_VK_MAX_ANISO", aa, 0);
         if (at && !strcmp(at, "half") && !getenv("DM_VK_TEX_QUALITY")) { setenv("DM_VK_TEX_QUALITY", "half", 1); setenv("DM_VK_TEX_QUALITY_AUTO", "1", 1); }   // (the profile's half: nvn_vk.c may keep full on a driver that crashed with it)
-#if DM_GAME_PROGRAM_ID != 0x01001F5010DFA000ull   // (Legends: Arceus decides Auto further on: its Dynamic FPS)
         if (af && atoi(af) >= 60) setenv("DM_FPS_TARGET", af, 0);   // (60 only when the app found a top phone and a display that 60 divides)
-#endif
         { const char *as = getenv("DM_AUTO_SCALER"); if (as && *as) setenv("DM_SCALER", as, 0); }
         { const char *al = getenv("DM_AUTO_LOWSPEC"); if (al && *al) setenv("DM_LOWSPEC", al, 0); }   // (Legends: Arceus on a low CPU or GPU: Lower specs, android_main.c lowspec)   // (SGSR on a mid or top GPU, the lighter Sharp on a low one)
         const char *g = getenv("DM_GRAPHICS"), *tq = getenv("DM_VK_TEX_QUALITY"), *an = getenv("DM_VK_MAX_ANISO"), *ft = getenv("DM_FPS_TARGET"), *w = getenv("DM_AUTO_WHAT"), *hz = getenv("DM_DISPLAY_HZ");
@@ -558,24 +553,8 @@ static void lowspec(void) {
     setenv("DM_ROMFS_OVERLAY", all, 1);
     fprintf(stderr, "boot: lower specs %d: shorter draw distance, %s (RomFS overlay %s)\n", lv, lv == 2 ? "no shadows" : "lighter shadows", root);
 }
-// No black bars in battle (DM_ARC_NOBARS, on unless 0): battle_resident.gfpak from Fl4sh's "Level of Detail + QOL" for 1.1.1, its battle_cinema_mask_00 panes moved
-//   off screen, kept in this library (qol_files.h) and laid over the game's RomFS like Lower specs. (That mod's far draw distance and unlimited stamina are left out:
-//   far draw distance cost about half the frame rate on a Galaxy S25+.) A draw-distance file an earlier build wrote there is removed
-#include "qol_files.h"
-static void qol(void) {
-    const char *b = getenv("DM_ARC_NOBARS"); int nb = !(b && *b && atoi(b) == 0);
-    char root[1100], p[1300]; snprintf(root, sizeof root, "%s/qol/romfs", g_files);
-    snprintf(p, sizeof p, "%s/bin/misc/app_config/field_common_config.bin", root); unlink(p);
-    snprintf(p, sizeof p, "%s/bin/archive/appli/battle_resident.gfpak", root);
-    if (!nb) { unlink(p); return; }
-    if (!write_all(p, QOL_no_battle_bars, sizeof QOL_no_battle_bars)) { fprintf(stderr, "boot: [RED] no black bars in battle: could not write %s\n", root); return; }
-    const char *o = getenv("DM_ROMFS_OVERLAY"); char all[4096];
-    snprintf(all, sizeof all, "%s%s%s", root, o && *o ? ":" : "", o && *o ? o : ""); setenv("DM_ROMFS_OVERLAY", all, 1);
-    fprintf(stderr, "boot: no black bars in battle (RomFS overlay %s)\n", root);
-}
 #else
 static void lowspec(void) { }
-static void qol(void) { }
 #endif
 // "No reflections" (profile key flat_normals, the menu's DM_FLAT_NORMALS, on unless 0): the game's terrain packs with their ground and bark normal maps made flat, made by
 //   the setup from the player's own files (dm/android/tools/flat_normals.py) into <game>/flat_normals, laid over the RomFS after every mod (hle_fs.c DM_ROMFS_OVERLAY, first
@@ -858,11 +837,10 @@ static void host_start(void) {
       if (g && !strcmp(g, "lowest")) setenv("DM_RES_CAP", "0.75", 0); }
 #if defined(DM_GAME_ANDROID_OPMODE) && DM_GAME_ANDROID_OPMODE >= 0
     { char m[4]; snprintf(m, sizeof m, "%d", DM_GAME_ANDROID_OPMODE); setenv("DM_OPMODE", m, 0); }
-#if DM_GAME_PROGRAM_ID == 0x01001F5010DFA000ull   // Legends: Arceus: Frame rate on Auto = the built-in Dynamic FPS (loader.c: 30 to 60, the game's step from each frame's
-    //   real time) on a phone the app found fit for 60 (its profile's DM_AUTO_FPS), else 30; 60 = a fixed 60 (a frame every refresh, hle_nvn.c arc_step); 30 = the game's own
-    { const char *t = getenv("DM_FPS_TARGET"), *a = getenv("DM_AUTO_FPS");
-      if ((!t || !*t) && a && atoi(a) >= 60) { setenv("DM_ARC_DYNFPS", "1", 1); setenv("DM_FPS_TARGET", "60", 1); }
-      else setenv("DM_AUTO_FPS", "30", 1); }
+#if DM_GAME_PROGRAM_ID == 0x01001F5010DFA000ull   // Legends: Arceus: 60 fps only when chosen (Auto is 30); at 60 a frame every refresh (its present interval 2
+    //   left aside), the game's step following the frame time (hle_nvn.c arc_step)
+    setenv("DM_AUTO_FPS", "30", 1);
+    { const char *f = getenv("DM_FPS_TARGET"); if (f && atoi(f) >= 60) setenv("DM_PRESENT_INTERVAL", "display", 0); }
 #endif   // the profile's android_op_mode (env.txt DM_OPMODE wins)
 #endif   // real sound output (AAudio, compat/aaudio_unit.c); env.txt can set 0
     // pipelines: every one the game makes is recorded here and built ahead at the next start, the list shipped with the game too, and the driver's compiled code kept
@@ -870,7 +848,6 @@ static void host_start(void) {
     snprintf(p, sizeof p, "%s/mods", g_files); mkdir(p, 0770);   // made by the app itself, so it can read what is put there (a folder another user made, adb's for one, it cannot)
     boot_guard(p);   // (before the mods are read: a crash with mods switches them off)
     mods_romfs(p);
-    qol();   // Legends: Arceus's no black bars in battle (DM_ARC_NOBARS), then Lower specs ahead of it
     lowspec();   // Legends: Arceus's "Lower specs" (DM_LOWSPEC): its RomFS files first in the overlay (after the mods: mods_romfs takes a set DM_ROMFS_OVERLAY for env.txt's choice)
     flat_normals();   // Legends: Arceus's "No reflections": its flat normal maps last in the overlay, under any mod
     SETP("DM_VK_PSO_RECORD", "vk_pipelines.bin"); SETP("DM_VK_PCACHE", "vk_pipeline_cache.bin"); SETG("DM_VK_PSO_SEED", "vk_pipelines_seed.bin");
