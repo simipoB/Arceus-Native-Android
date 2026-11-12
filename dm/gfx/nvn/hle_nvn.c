@@ -1220,7 +1220,11 @@ static int report_interval(int real) {
     int k = r == 1000 ? reported_hold() : 0; return k > 0 ? k : real;
 }
 NVN(nvnWindowGetPresentInterval, int, const NVNwindow *w) { return report_interval(((const win_t *)w)->interval); }   // Link's Awakening reads it back every frame
-NVN(nvnWindowSetPresentInterval, void, NVNwindow *w, int v) { if (((win_t *)w)->interval != v) LOG("[nvn] the game sets present interval %d → %d", ((win_t *)w)->interval, v); ((win_t *)w)->interval = v; }
+NVN(nvnWindowSetPresentInterval, void, NVNwindow *w, int v) {   // (with the game's call site: the function that picks its frame rate, for a high-frame-rate patch)
+    if (((win_t *)w)->interval != v) { void *lr = __builtin_return_address(0); module_t *m = module_of(lr);
+        if (m) LOG("[nvn] the game sets present interval %d → %d (called from %s+%#llx)", ((win_t *)w)->interval, v, m->name, (unsigned long long)((uint8_t *)lr - m->base));
+        else LOG("[nvn] the game sets present interval %d → %d", ((win_t *)w)->interval, v); }
+    ((win_t *)w)->interval = v; }
 NVN(nvnWindowSetCrop, void, NVNwindow *w, int x, int y, int ww, int hh) {
     win_t *o = (win_t *)w; int v[4] = {x, y, ww, hh};
     if (memcmp(o->crop, v, sizeof v)) LOG("[nvn] WindowCrop %d,%d %dx%d", x, y, ww, hh);
