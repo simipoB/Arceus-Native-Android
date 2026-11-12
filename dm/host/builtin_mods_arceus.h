@@ -170,18 +170,6 @@ static const bmod_site arc_dynamic_fps[] = {
     { 0x2af25f8, 4, arc_dynamic_fps_79_o, arc_dynamic_fps_79_m },
 };
 
-static const uint8_t arc_far_lod_0_o[] = { 0x60, 0x1e, 0x40, 0xbd }, arc_far_lod_0_m[] = { 0x00, 0x10, 0x3e, 0x1e };
-static const uint8_t arc_far_lod_1_o[] = { 0x00, 0xcc, 0x21, 0x1e }, arc_far_lod_1_m[] = { 0x00, 0x10, 0x26, 0x1e };
-static const uint8_t arc_far_lod_2_o[] = { 0x28, 0x01, 0x30, 0x36 }, arc_far_lod_2_m[] = { 0x1f, 0x20, 0x03, 0xd5 };
-static const uint8_t arc_far_lod_3_o[] = { 0x00, 0xd8, 0x21, 0x7e }, arc_far_lod_3_m[] = { 0x00, 0x10, 0x26, 0x1e };
-static const bmod_site arc_far_lod[] = {
-    { 0x2a9b670, 4, arc_far_lod_0_o, arc_far_lod_0_m },
-    { 0x2a9b6c4, 4, arc_far_lod_1_o, arc_far_lod_1_m },
-    { 0x77c75c, 4, arc_far_lod_2_o, arc_far_lod_2_m },
-    { 0x77c76c, 4, arc_far_lod_3_o, arc_far_lod_3_m },
-};
-
 static const bmod BUILTIN_MODS_ARCEUS[] = {
     { "dynamic_fps", { "aee8f150dda1b5a838806e1a5ea6827a", NULL }, arc_dynamic_fps, 80 },
-    { "far_lod", { "aee8f150dda1b5a838806e1a5ea6827a", NULL }, arc_far_lod, 4 },
 };

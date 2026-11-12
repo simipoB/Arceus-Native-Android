@@ -285,8 +285,6 @@ public final class GameMenu {
         if (GameSettings.arceus(a)) choice(a, "DM_LOWSPEC", t(a, "Lower specs"), new String[][] { { "", t(a, "Auto"), t(a, "Auto: this phone gets %s", t(a, p[8].isEmpty() ? "Off" : "On")) },
             { "0", t(a, "Off"), t(a, "Off: the world as the game draws it") },
             { "1", t(a, "On"), t(a, "On: shorter draw distance for Pokémon, people and trees, lighter shadows") }, { "2", t(a, "Lowest"), t(a, "Lowest: shorter draw distance and no shadows") } });
-        if (GameSettings.arceus(a)) choice(a, "DM_ARC_FAR", t(a, "Draw distance"), new String[][] { { "", t(a, "Normal"), t(a, "Normal: as the game draws it") },
-            { "1", t(a, "Far"), t(a, "Far: Pokémon, people and trees much further away, sharper textures; about 30 fps even on top phones, not with Lower specs (Fl4sh's Level of Detail mod)") } });
         if (GameSettings.arceus(a)) choice(a, "DM_ARC_NOBARS", t(a, "Black bars in battle"), new String[][] { { "", t(a, "Off"), t(a, "Off: battles use the whole screen") },
             { "0", t(a, "On"), t(a, "On: as the game shows battles") } });
         if (GameSettings.has60(a)) choice(a, "DM_FPS_TARGET", t(a, "Frame rate"), new String[][] { { "", t(a, "Auto"), (GameSettings.arceus(a) ? (p[5].equals("60") ? t(a, "Auto: 30 to 60 fps as the phone can, game speed stays right (Fl4sh's Dynamic FPS mod)") : t(a, "Auto: this phone gets %s fps", "30"))

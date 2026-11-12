@@ -495,10 +495,8 @@ static int fps_patch(module_t *m, uint64_t lim, int64_t p0, int64_t p1);
 // "Dynamic FPS": up to 60, the game's step from the time each frame really took) with DM_FPS_TARGET=60, their 2048×2048 shadow maps (Fl4sh's "2K Shadows") with
 // DM_SHADOWS=2k. A mod goes in whole or not at all: every site must still hold the game's own bytes and none may be code the rewriter turned into a branch
 #include "builtin_mods.h"
-#include "builtin_mods_arceus.h"   // (Legends: Arceus 1.1.1's, from its own main: Fl4sh's Dynamic FPS; far_lod, the code half of Fl4sh's "Level of Detail": every sampler
-                                   //   with LOD bias -1 and 16x anisotropic filtering, under the engine's own filtering cap)
+#include "builtin_mods_arceus.h"   // (Legends: Arceus 1.1.1's, from its own main: Fl4sh's Dynamic FPS)
 static int bmod_wanted(const char *name, int arceus) {
-    if (arceus && !strcmp(name, "far_lod")) { const char *e = getenv("DM_ARC_FAR"), *l = getenv("DM_LOWSPEC"); return e && atoi(e) == 1 && !(l && atoi(l) >= 1); }   // (Draw distance: Far, android_main.c qol)
     if (arceus && !strcmp(name, "dynamic_fps")) { const char *e = getenv("DM_ARC_DYNFPS"); return e && atoi(e); }   // (Legends: Arceus: Frame rate on Auto, android_main.c; its 60 is a fixed 60)
     if (!strcmp(name, "dynamic_fps")) { const char *e = getenv("DM_FPS_TARGET"); return e && atoi(e) >= 60; }
     if (!strcmp(name, "shadows_2k")) { const char *e = getenv("DM_SHADOWS"); return e && !strcasecmp(e, "2k"); }   // (test only: not offered in the menu)
