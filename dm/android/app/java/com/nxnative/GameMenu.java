@@ -225,7 +225,8 @@ public final class GameMenu {
         String was = GameSettings.get(a, key);
         GameSettings.set(a, key, value);
         boolean now;
-        if (a instanceof GameActivity && (key.equals("DM_FRAMEGEN") || key.equals("DM_FPS_TARGET"))) ((GameActivity) a).displayMode();   // (the screen's rate follows the pictures shown)
+        if (a instanceof GameActivity && (key.equals("DM_FRAMEGEN") || key.equals("DM_FPS_TARGET"))) ((GameActivity) a).displayMode();
+        if (a instanceof GameActivity && key.equals("DM_GYRO")) ((GameActivity) a).gyro();   // (the sensor listened to only while it is on)   // (the screen's rate follows the pictures shown)
         if (key.equals("DM_PERF_OVERLAY")) { if (a instanceof GameActivity) ((GameActivity) a).perfOverlay(value.equals("on")); now = true; }
         else if (key.equals("DM_SUSTAINED")) { if (a instanceof GameActivity) ((GameActivity) a).sustained(); now = true; }
         else if (key.equals("DM_LANG")) now = true;
@@ -306,6 +307,9 @@ public final class GameMenu {
         // the right stick / camera, touch and controller alike (hle_hid.c rsens)
         choice(a, "DM_RSTICK_SENS", t(a, "Camera sensitivity"), new String[][] { { "50", "50 %", t(a, "Slower camera: the right stick and the touch camera turn less") }, { "75", "75 %", "" },
             { "", "100 %", t(a, "As on the Switch") }, { "125", "125 %", "" }, { "150", "150 %", t(a, "Faster camera: full speed with less of the stick") }, { "200", "200 %", "" } });
+        // gyro aiming (GameActivity.gyro, hle_hid.c): the phone's gyroscope turns the camera, at the camera sensitivity above
+        choice(a, "DM_GYRO", t(a, "Gyro aiming"), new String[][] { { "", t(a, "Off"), t(a, "Off: moving the phone does nothing") },
+            { "aim", t(a, "While aiming"), t(a, "While aiming (ZL held): turn and tilt the phone to aim") }, { "on", t(a, "Always"), t(a, "Always: turning the phone turns the camera") } });
         heading(a, t(a, "Touch controls"));
         // L3 / R3 (pressing the sticks, touch_ui.c): off by default, Sword and Shield hardly use them (the left stick whistles in the Wild Area)
         choice(a, "DM_TOUCH_L3R3", t(a, "L3 / R3 buttons"), new String[][] { { "", t(a, "Off"), t(a, "Off: no L3 / R3 on screen (a controller's stick buttons still work)") },
@@ -314,6 +318,7 @@ public final class GameMenu {
         choice(a, "DM_TOUCH_HAPTIC", t(a, "Vibrate on press"), new String[][] { { "", t(a, "Like rumble"), t(a, "Like rumble: off when Rumble is Off") },
                                                                                 { "on", t(a, "On"), "" }, { "off", t(a, "Off"), "" } });
         slider(a, t(a, "Opacity"), "DM_TOUCH_OPACITY", 20, 100, 100, v -> v + " %");
+        slider(a, t(a, "Button size"), "DM_TOUCH_SIZE", 80, 130, 100, v -> v + " %");   // (touch_ui.c size_k: every control, the moved ones too)
         slider(a, t(a, "Fade after"), "DM_TOUCH_FADE", 0, 10, 3, v -> v == 0 ? t(a, "never fade") : t(a, "%d s without a touch", v));
         action(a, t(a, "Move the touch controls"), t(a, "Drag a control to move it, pinch to resize, double-tap to hide. Hold − for 2 s to save (hold + to reset)."), () -> {
             if (dlg != null) dlg.dismiss(); try { nativeEditTouch(); } catch (UnsatisfiedLinkError e) { } });

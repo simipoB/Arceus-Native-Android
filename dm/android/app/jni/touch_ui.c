@@ -80,6 +80,10 @@ static void layout_apply(float w, float h) {
     if (!g_lay_loaded) layout_load();
     for (int c = 0; c < NCTL; c++) if (g_ov[c].set && c != C_CAM) { g_c[c].cx = g_ov[c].fx * w; g_c[c].cy = g_ov[c].fy * h; g_c[c].r = g_ov[c].fr * h; g_c[c].shown = g_ov[c].shown; }
 }
+// Button size (DM_TOUCH_SIZE, Controls -> Touch controls: 80 to 130 %, 100 by default): every control larger or smaller about its own centre, the layout editor's
+//   sizes included (touch_layout.txt keeps them at 100 %). 130 at most: A B X Y would touch beyond it. -1: not read yet
+static float g_size = -1;
+static float size_k(void) { if (g_size < 0) { const char *e = getenv("DM_TOUCH_SIZE"); float v = e ? (float)atof(e) : 100.0f; g_size = (v < 80 || v > 130 ? 100.0f : v) / 100.0f; } return g_size; }
 static void sel_to_win(float lx, float ly, float *x, float *y);
 // L3 / R3 on screen: an option (DM_TOUCH_L3R3=on, Controls → Touch controls), off by default: Sword and Shield hardly use them. -1: not read yet
 static int g_l3r3 = -1;
@@ -133,6 +137,8 @@ static void layout(float w, float h) {
         g_c[C_X] = (ctl){ fx, fy - gap, br, OVL_G_X, 1, DM_BTN_X }; g_c[C_Y] = (ctl){ fx - gap, fy, br, OVL_G_Y, 1, DM_BTN_Y }; }
     if (!g_rstick_on) { g_rknob_x = g_c[C_RSTICK].cx; g_rknob_y = g_c[C_RSTICK].cy; }
     layout_apply(w, h);
+    { float k = size_k(); if (k != 1.0f) for (int c = 0; c < NCTL; c++) if (c != C_CAM && c != C_SEL && c != C_BACK) {
+        g_c[c].r *= k; g_c[c].cx = clampf(g_c[c].cx, g_c[c].r, w - g_c[c].r); g_c[c].cy = clampf(g_c[c].cy, g_c[c].r, h - g_c[c].r); } }
     if (!l3r3_on()) g_c[C_L3].shown = g_c[C_R3].shown = 0;   // (an option, off by default: the layout editor's own choice only counts while it is on)
     if (!g_stick_on) { g_stick_x = g_knob_x = g_c[C_STICK].cx; g_stick_y = g_knob_y = g_c[C_STICK].cy; }
 }
@@ -372,7 +378,7 @@ static int edit_hit(float x, float y) {   // the smallest control (shown or not)
         float dx = x - g_c[c].cx, dy = y - g_c[c].cy, r = g_c[c].r * 1.2f; if (dx * dx + dy * dy <= r * r && g_c[c].r < br) { br = g_c[c].r; best = c; } }
     return best;
 }
-static void edit_store(int c) { g_ov[c].set = 1; g_ov[c].fx = g_c[c].cx / g_w; g_ov[c].fy = g_c[c].cy / g_h; g_ov[c].fr = g_c[c].r / g_h; g_ov[c].shown = g_c[c].shown; }
+static void edit_store(int c) { g_ov[c].set = 1; g_ov[c].fx = g_c[c].cx / g_w; g_ov[c].fy = g_c[c].cy / g_h; g_ov[c].fr = g_c[c].r / size_k() / g_h; g_ov[c].shown = g_c[c].shown; }
 static void edit_event(const AInputEvent *e) {
     int32_t act = AMotionEvent_getAction(e) & AMOTION_EVENT_ACTION_MASK;
     size_t idx = (size_t)((AMotionEvent_getAction(e) & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK) >> AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT);
@@ -381,8 +387,12 @@ static void edit_event(const AInputEvent *e) {
         size_t k = act == AMOTION_EVENT_ACTION_DOWN ? 0 : idx; float x = AMotionEvent_getX(e, k), y = AMotionEvent_getY(e, k);
         if (act == AMOTION_EVENT_ACTION_DOWN) { for (int i = 0; i < 10; i++) g_ep[i].id = -1; g_pinch.active = 0; }
         int c = edit_hit(x, y);
-        for (int i = 0; i < 10; i++) if (g_ep[i].id >= 0 && c >= 0 && g_ep[i].c == c) {   // a second finger on the same control: pinch
-            float dx = x - g_ep[i].x0, dy = y - g_ep[i].y0; g_pinch.c = c; g_pinch.active = 1; g_pinch.d0 = sqrtf(dx * dx + dy * dy) + 1; g_pinch.r0 = g_c[c].r; break; }
+        // a second finger while one holds a control: a pinch of that control, wherever the second lands (on the same control or on nothing: + and - are too
+        //   small for two fingers on them). On another control it moves that one instead
+        if (!g_pinch.active) for (int i = 0; i < 10; i++) if (g_ep[i].id >= 0 && g_ep[i].c >= 0 && (c < 0 || c == g_ep[i].c)) {
+            float fx = g_ep[i].x0, fy = g_ep[i].y0;
+            for (size_t q = 0; q < AMotionEvent_getPointerCount(e); q++) if (AMotionEvent_getPointerId(e, q) == g_ep[i].id) { fx = AMotionEvent_getX(e, q); fy = AMotionEvent_getY(e, q); }
+            float dx = x - fx, dy = y - fy; c = g_ep[i].c; g_pinch.c = c; g_pinch.active = 1; g_pinch.d0 = sqrtf(dx * dx + dy * dy) + 1; g_pinch.r0 = g_c[c].r; break; }
         for (int i = 0; i < 10; i++) if (g_ep[i].id < 0) { g_ep[i].id = AMotionEvent_getPointerId(e, k); g_ep[i].c = c; g_ep[i].x0 = x; g_ep[i].y0 = y; g_ep[i].t0 = now_s();
             g_ep[i].ox = c >= 0 ? g_c[c].cx - x : 0; g_ep[i].oy = c >= 0 ? g_c[c].cy - y : 0; break; }
     } else if (act == AMOTION_EVENT_ACTION_MOVE) {
@@ -400,7 +410,7 @@ static void edit_event(const AInputEvent *e) {
             if (c >= 0 && t - g_ep[i].t0 < 0.3 && mx * mx + my * my < g_h * g_h * 0.0004f) {   // a tap: a double tap toggles the control
                 if (g_last_tap_c == c && t - g_last_tap_t < 0.4 && c != C_PLUS && c != C_MINUS && c != C_MENU) { g_c[c].shown = !g_c[c].shown; edit_store(c); g_last_tap_c = -1; click_locked(); }
                 else { g_last_tap_c = c; g_last_tap_t = t; } }
-            if (g_pinch.active && g_pinch.c == c) g_pinch.active = 0;
+            if (g_pinch.active && g_pinch.c == c) { g_pinch.active = 0; for (int j = 0; j < 10; j++) if (j != i && g_ep[j].c == c) g_ep[j].c = -1; }   // (the other finger lets go too: no jump)
             g_ep[i].id = -1; }
     }
 }
@@ -614,6 +624,7 @@ void touch_ui_setting(const char *key, const char *value) {
     pthread_mutex_lock(&g_mu);
     if (!strcmp(key, "DM_TOUCH_OPACITY")) g_opacity = value ? clampf((float)atof(value) / 100.0f, 0.2f, 1.0f) : 1.0f;
     else if (!strcmp(key, "DM_TOUCH_FADE")) g_fade = value ? fmaxf(0.0f, (float)atof(value)) : 3.0f;
+    else if (!strcmp(key, "DM_TOUCH_SIZE")) { float v = value ? (float)atof(value) : 100.0f; g_size = (v < 80 || v > 130 ? 100.0f : v) / 100.0f; g_w = g_h = 0; }   // (laid out again at the next frame)
     else if (!strcmp(key, "DM_TOUCH_L3R3")) { g_l3r3 = value && !strcmp(value, "on"); g_w = g_h = 0; }   // (laid out again on the next frame)
 #ifdef __ANDROID__
     else { void touch_ui_haptic_setting(const char *, const char *); touch_ui_haptic_setting(key, value); }   // DM_TOUCH_HAPTIC, DM_RUMBLE
@@ -650,7 +661,9 @@ int front_overlay(dm_ovl_item *it, int max, int width, int height) {
     } else if (g_visible) {
         double t = now_s(); int idle = (g_fade > 0 && t - g_touch_t > g_fade) && !g_btn && !g_stick_on && !g_rstick_on;   // nothing touched for the fade time: everything faint (in menus and cutscenes too: hiding them there broke the flow of play)
         float ia = idle ? 0.22f : 1.0f;
-        int faint = t - g_inner_t > 2.0;   // the D-pad and the right stick fade 2 s after their last touch
+        // every control at the same strength (the lower ones had faded on their own, 2 s after their last touch, and the sticks were drawn at 75 %: the bottom of the
+        //   screen looked more see-through than the top). Opacity and the idle fade still apply to all
+        int faint = 0;
         int menu = GESTURES_ON && touch_menu_active();   // its items are tapped: the buttons go (target_at)
         for (int c = C_A; c < NCTL; c++) { if (!g_c[c].shown || (menu && (c == C_THROW || c == C_LOCK))) continue;
             int on = (g_btn & g_c[c].btn) != 0; float al = c >= C_UP && c <= C_RIGHT && faint && !on ? 0.25f : 1.0f; if (idle) al = fminf(al, ia);
@@ -668,8 +681,8 @@ int front_overlay(dm_ovl_item *it, int max, int width, int height) {
             bubble(it, &n, max, &g_c[c], on, 0, al);
             if (c >= C_UP && c <= C_RIGHT && al == 1.0f) { float r = g_c[c].r, ox = c == C_LEFT ? -0.42f : c == C_RIGHT ? 0.42f : 0, oy = c == C_UP ? -0.42f : c == C_DOWN ? 0.42f : 0;
                 add(it, &n, max, g_c[c].cx + ox * r, g_c[c].cy + oy * r, r * 0.22f, OVL_DISC, 255, 255, 255, 0.9f); } }
-        compass(it, &n, max, g_stick_on ? 1.0f : idle ? ia : 0.75f, g_stick_x, g_stick_y, g_knob_x, g_knob_y, g_c[C_STICK].r);
-        if (g_c[C_RSTICK].shown) compass(it, &n, max, g_rstick_on ? 1.0f : idle ? ia : faint ? 0.25f : 0.75f, g_c[C_RSTICK].cx,   // faint while unused: it and the D-pad sit over the dialogue box
+        compass(it, &n, max, g_stick_on ? 1.0f : idle ? ia : 1.0f, g_stick_x, g_stick_y, g_knob_x, g_knob_y, g_c[C_STICK].r);
+        if (g_c[C_RSTICK].shown) compass(it, &n, max, g_rstick_on ? 1.0f : idle ? ia : 1.0f, g_c[C_RSTICK].cx,
              g_c[C_RSTICK].cy, g_rknob_x, g_rknob_y, g_c[C_RSTICK].r);
         for (int i = 0; i < n; i++) { it[i].a *= g_opacity; it[i].galpha *= g_opacity; }
     }

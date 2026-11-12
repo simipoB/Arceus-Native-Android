@@ -197,6 +197,8 @@ void touch_ui_hide(void);
 void touch_ui_pad(int connected);
 #include <jni.h>
 JNIEXPORT void JNICALL Java_com_nxnative_GameActivity_nativePadConnected(JNIEnv *env, jclass c, jboolean on) { (void)env; (void)c; touch_ui_pad(on); }   // GameActivity.java
+void dm_gyro_set(float yaw, float pitch);
+JNIEXPORT void JNICALL Java_com_nxnative_GameActivity_nativeGyro(JNIEnv *env, jclass c, jfloat yaw, jfloat pitch) { (void)env; (void)c; dm_gyro_set(yaw, pitch); }   // (hle_hid.c, gyro aiming)
 void touch_ui_setting(const char *key, const char *value);
 void touch_ui_edit(void);
 // GameMenu.java: a setting changed while playing (it also writes env.txt for the next start). The ones the game can take at once go to their owners here, never through
@@ -215,7 +217,8 @@ JNIEXPORT jboolean JNICALL Java_com_nxnative_GameMenu_nativeSetting(JNIEnv *env,
             fprintf(stderr, "frame rate: %d fps, switched while playing\n", t);
         } else now = 0;
     }
-    else if (!strcmp(k, "DM_TOUCH_OPACITY") || !strcmp(k, "DM_TOUCH_FADE") || !strcmp(k, "DM_TOUCH_HAPTIC") || !strcmp(k, "DM_TOUCH_L3R3")) touch_ui_setting(k, v);
+    else if (!strcmp(k, "DM_GYRO")) { extern _Atomic int dm_gyro_mode; atomic_store(&dm_gyro_mode, v && !strcmp(v, "on") ? 2 : v && !strcmp(v, "aim") ? 1 : 0); }
+    else if (!strcmp(k, "DM_TOUCH_OPACITY") || !strcmp(k, "DM_TOUCH_SIZE") || !strcmp(k, "DM_TOUCH_FADE") || !strcmp(k, "DM_TOUCH_HAPTIC") || !strcmp(k, "DM_TOUCH_L3R3")) touch_ui_setting(k, v);
     else if (!strcmp(k, "DM_RUMBLE")) { touch_ui_setting(k, v); now = 0; }
     else if (!strcmp(k, "DM_RSTICK_SENS")) { extern _Atomic int dm_rstick_pct __attribute__((weak)); int p = v ? atoi(v) : 100; if (p < 25 || p > 400) p = 100; if (&dm_rstick_pct) atomic_store(&dm_rstick_pct, p); else now = 0; }   // (the touch click follows it at once; the game's motors are GameActivity's, GameMenu decides)
     else if (!strcmp(k, "DM_ASPECT")) __atomic_store_n(&dm_aspect_mode, !v ? DM_ASPECT_FIT : !strcmp(v, "20:9") ? DM_ASPECT_20_9 : !strcmp(v, "fill") ? DM_ASPECT_FILL : DM_ASPECT_FIT, __ATOMIC_RELAXED);

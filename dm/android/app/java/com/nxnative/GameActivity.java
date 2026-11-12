@@ -13,6 +13,7 @@ import android.view.InputDevice;
 public final class GameActivity extends NativeActivity implements InputManager.InputDeviceListener {
     static { System.loadLibrary("nxnative"); }   // loaded through this class's loader, so the native method below resolves (NativeActivity then opens the same library)
     private static native void nativePadConnected(boolean connected);
+    private static native void nativeGyro(float yaw, float pitch);   // (android_main.c -> hle_hid.c dm_gyro_set: gyro aiming)
     private static native int nativeLoading();   // 1 while the game loads (android_main.c: a burst of its file reads)
     private static native long nativeFrames();   // frames the engine has presented (android_main.c), -1 before it draws
     private InputManager im;
@@ -171,7 +172,35 @@ public final class GameActivity extends NativeActivity implements InputManager.I
         }, "live shaders");
         t.setPriority(Thread.MIN_PRIORITY); t.setDaemon(true); t.start();
     }
-    @Override protected void onResume() { super.onResume(); check(); displayMode(); }
+    @Override protected void onResume() { super.onResume(); check(); displayMode(); gyro(); }
+    @Override protected void onPause() { gyroOff(); super.onPause(); }
+    // Gyro aiming (the menu's Gyro aiming, DM_GYRO aim / on): the gyroscope's rates turned to the screen as it is held, yaw (turning right positive) and pitch
+    //   (the top edge going away positive), to the engine (hle_hid.c, which adds them to the camera while aiming or always). Listened to only while it is on
+    private android.hardware.SensorEventListener gyroL;
+    void gyro() {
+        String m = GameSettings.get(this, "DM_GYRO"); boolean want = m.equals("aim") || m.equals("on");
+        if (!want) { gyroOff(); return; }
+        if (gyroL != null) return;
+        android.hardware.SensorManager sm = getSystemService(android.hardware.SensorManager.class); if (sm == null) return;
+        android.hardware.Sensor s = sm.getDefaultSensor(android.hardware.Sensor.TYPE_GYROSCOPE); if (s == null) return;
+        gyroL = new android.hardware.SensorEventListener() {
+            int rot = -1; long rotT;
+            @Override public void onSensorChanged(android.hardware.SensorEvent e) {
+                if (rot < 0 || e.timestamp - rotT > 500_000_000L) { android.view.Display d = getDisplay(); rot = d != null ? d.getRotation() : 1; rotT = e.timestamp; }
+                float x = e.values[0], y = e.values[1], sx, sy;   // device axes to the screen's (x right, y up)
+                switch (rot) { case android.view.Surface.ROTATION_90: sx = -y; sy = x; break; case android.view.Surface.ROTATION_180: sx = -x; sy = -y; break;
+                               case android.view.Surface.ROTATION_270: sx = y; sy = -x; break; default: sx = x; sy = y; }
+                nativeGyro(-sy, -sx);   // turning right is negative about the screen's up axis; the top edge going away is negative about its x axis
+            }
+            @Override public void onAccuracyChanged(android.hardware.Sensor s, int a) { }
+        };
+        sm.registerListener(gyroL, s, android.hardware.SensorManager.SENSOR_DELAY_GAME);
+    }
+    private void gyroOff() {
+        if (gyroL == null) return;
+        android.hardware.SensorManager sm = getSystemService(android.hardware.SensorManager.class); if (sm != null) sm.unregisterListener(gyroL);
+        gyroL = null; nativeGyro(0, 0);
+    }
     // am start ... --es menu <page>: the settings panel (testing over adb; 1 = the controller buttons)
     @Override protected void onNewIntent(Intent i) { super.onNewIntent(i); String m = i.getStringExtra("menu"); if (m != null) GameMenu.show(this, m.equals("1") ? 1 : 0); }
     @Override protected void onActivityResult(int req, int res, Intent data) { if (!GameMenu.onResult(this, req, res, data)) super.onActivityResult(req, res, data); }   // the in-game menu's file pickers
