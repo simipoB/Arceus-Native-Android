@@ -840,6 +840,9 @@ static void host_start(void) {
 #if DM_GAME_PROGRAM_ID == 0x01001F5010DFA000ull   // Legends: Arceus: 60 fps only when chosen (Auto is 30); at 60 a frame every refresh (its present interval 2
     //   left aside), the game's step following the frame time (hle_nvn.c arc_step)
     setenv("DM_AUTO_FPS", "30", 1);
+    // Faster rendering (DM_NVN_ASYNC, the replay on its own thread) is off for this game whatever env.txt says: with it the game crashed at loading screens
+    //   (Arceus-Native-Android#3: a Galaxy S23 FE and another phone, a game object found overwritten in the game's own code; gone with it off)
+    if (getenv("DM_NVN_ASYNC")) { unsetenv("DM_NVN_ASYNC"); fprintf(stderr, "boot: Faster rendering is off for Legends: Arceus (it crashed the game at loading screens)\n"); }
     { const char *f = getenv("DM_FPS_TARGET"); if (f && atoi(f) >= 60) setenv("DM_PRESENT_INTERVAL", "display", 0); }
 #endif   // the profile's android_op_mode (env.txt DM_OPMODE wins)
 #endif   // real sound output (AAudio, compat/aaudio_unit.c); env.txt can set 0

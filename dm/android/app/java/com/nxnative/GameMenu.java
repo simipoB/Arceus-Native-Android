@@ -514,7 +514,8 @@ public final class GameMenu {
         // the replay on its own thread (hle_nvn.c DM_NVN_ASYNC): the game's thread hands each frame's graphics work over instead of translating it itself (about a quarter
         //   of a frame on a slow CPU, #99). Off by default until players have run it on many phones
         heading(a, t(a, "Performance"));
-        choice(a, "DM_NVN_ASYNC", t(a, "Faster rendering (experimental)"), new String[][] { { "", t(a, "Off"), "" },
+        // (not for Legends: Arceus: with it the game crashed at loading screens, Arceus-Native-Android#3; android_main.c turns it off there)
+        if (!GameSettings.arceus(a)) choice(a, "DM_NVN_ASYNC", t(a, "Faster rendering (experimental)"), new String[][] { { "", t(a, "Off"), "" },
             { "1", t(a, "On"), t(a, "On: the graphics work runs on its own thread, next to the game's. Not tested on every phone yet: if the game misbehaves, turn it off and tell us on GitHub") } });
         // a frame capture for a bug report (nvn_vk.c, Frame capture): the engine reads capture.req (frames to wait, so the menu can be closed first) and writes the ZIP
         heading(a, t(a, "Bug reports"));
