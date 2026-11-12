@@ -50,10 +50,15 @@ static void *scan_f32_main(void *a) {
             while (fgets(ln, sizeof ln, mf)) {
                 unsigned long lo, hi; char perm[8];
                 if (sscanf(ln, "%lx-%lx %7s", &lo, &hi, perm) != 3 || perm[0] != 'r') continue;
-                if (hi <= lo0 || lo >= hi0) continue; if (lo < lo0) lo = lo0; if (hi > hi0) hi = hi0;
+                int inmod = 0; for (int q = 0; q < g_nmod; q++) { uintptr_t mb = (uintptr_t)g_mod[q].base, me = mb + g_mod[q].size; if (lo < me && hi > mb) { inmod = 1; if (lo < mb) lo = mb; if (hi > me) hi = me; break; } }
+                if (!inmod) { if (hi <= lo0 || lo >= hi0) continue; if (lo < lo0) lo = lo0; if (hi > hi0) hi = hi0; }
                 if (lo >= (uintptr_t)g_heap && lo < (uintptr_t)g_heap + g_heap_cap && hi > (uintptr_t)g_heap + g_heap_cur) hi = (uintptr_t)g_heap + g_heap_cur;   // (the heap's tail may be given back)
                 for (const uint32_t *w = (const uint32_t *)lo; (uintptr_t)(w + 1) <= hi; w++) if (*w == bits) {
                     hits++; if (nprev[k] < SCAN_KEEP) prev[k][nprev[k]++] = (uintptr_t)w;
+                    if (hits <= 64 && round == 2) {   // (round 2: every place once, with the mapping it is in)
+                        const char *nm = strchr(ln, '/'); char rg[96] = ""; if (nm) snprintf(rg, sizeof rg, "%.*s", (int)strcspn(nm, "\n"), nm);
+                        module_t *m2 = module_of(w);
+                        LOG("[scan] %g at %p (%s+%#llx) in %lx-%lx %s %s", v[k], (void *)w, m2 ? m2->name : "as", (unsigned long long)((uintptr_t)w - (m2 ? (uintptr_t)m2->base : lo0)), lo, hi, perm, rg); }
                     if (hits <= 12) { module_t *m = module_of(w);
                         o += m ? snprintf(line + o, sizeof line - o, " %s+%#llx", m->name, (unsigned long long)((uintptr_t)w - (uintptr_t)m->base))
                                : snprintf(line + o, sizeof line - o, " heap+%#llx", (unsigned long long)((uintptr_t)w - (uintptr_t)g_heap)); if (o >= (int)sizeof line) o = (int)sizeof line - 1; } }
@@ -64,7 +69,21 @@ static void *scan_f32_main(void *a) {
     }
     return NULL;
 }
+// DM_POKE_F32=<module>:<offset>=<value>[,...] (a test, never on by default): those floats written once at start, before the game reads them (with DM_SCAN_F32 the
+//   scan then shows where the new value flows, e.g. Legends: Arceus' frame step set to 1/60 for a 60 fps test)
+static void poke_f32(void) {
+    const char *e = getenv("DM_POKE_F32"); if (!e) return;
+    char buf[256]; snprintf(buf, sizeof buf, "%s", e);
+    for (char *t = strtok(buf, ","); t; t = strtok(NULL, ",")) {
+        char *c = strchr(t, ':'), *q = c ? strchr(c, '=') : NULL; if (!c || !q) continue; *c = 0; *q = 0;
+        unsigned long long off = strtoull(c + 1, NULL, 0); float v = strtof(q + 1, NULL);
+        for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, t) && off + 4 <= g_mod[i].size) {
+            float was; memcpy(&was, g_mod[i].base + off, 4); memcpy(g_mod[i].base + off, &v, 4);
+            LOG("[poke] %s+%#llx: %g -> %g", t, off, was, v); }
+    }
+}
 static void scan_f32_start(void) {
+    static int poked; if (!poked++) poke_f32();
     static int started; if (started || !getenv("DM_SCAN_F32")) return; started = 1;
     pthread_t t; if (!pthread_create(&t, NULL, scan_f32_main, NULL)) { pthread_detach(t); LOG("[scan] DM_SCAN_F32=%s: the game's memory searched every 10 s", getenv("DM_SCAN_F32")); }
 }

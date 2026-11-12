@@ -87,8 +87,8 @@ final class GameSettings {
     // the games the built-in 60 fps patch knows (loader.c FPS_SITES: Pokémon Shield and Sword 1.3.2)
     // the frame-rate setting: Sword / Shield 1.3.2 (loader.c fps_patch), Scarlet / Violet 4.0.0 (loader.c's built-in Dynamic FPS mod)
     static final boolean AUTO_60 = false;
-    static boolean has60(Context c) { String id = game(c)[0]; return "01008DB008C2C000".equalsIgnoreCase(id) || "0100ABF008968000".equalsIgnoreCase(id) || paldea(c); }
-    // Pokémon Legends: Arceus: its "Lower specs" (the POTATO mod's RomFS files, android_main.c lowspec); no 60 fps (the game counts frames: at 60 it runs fast)
+    static boolean has60(Context c) { String id = game(c)[0]; return "01008DB008C2C000".equalsIgnoreCase(id) || "0100ABF008968000".equalsIgnoreCase(id) || paldea(c) || arceus(c); }
+    // Pokémon Legends: Arceus: its "Lower specs" (the POTATO mod's RomFS files, android_main.c lowspec); 60 fps since its frame step follows the frame time (hle_nvn.c arc_step)
     static boolean arceus(Context c) { return "01001F5010DFA000".equalsIgnoreCase(game(c)[0]); }
     // Legends: Arceus "No reflections": the ground's normal maps made flat (setup_game.py flat_normals, android_main.c flat_normals): on unless DM_FLAT_NORMALS=0
     static boolean flatNormals(Context c) { return arceus(c) && !"0".equals(get(c, "DM_FLAT_NORMALS")); }

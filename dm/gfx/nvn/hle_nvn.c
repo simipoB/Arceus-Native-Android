@@ -1634,6 +1634,28 @@ static void dyn_tick(const win_t *o) {
     atomic_store(&g_fs_k, vs.k);
     if (k0 && vs.k != k0 && nlog < 40) LOG("[nvn] dynamic fps: %d fps at present %llu (cost %.2f slots of 16.67 ms, GPU %.2f)%s", 60 / vs.k, (unsigned long long)o->presents, cost, gpu, ++nlog == 40 ? "; further changes not logged" : "");
 }
+// Legends: Arceus at 60 fps (DM_FPS_TARGET=60; the in-game menu): the game advances its logic by a frame time it keeps in its data at main+0x397e8d8, in nanoseconds
+//   (33,333,334: 1/30 s), and asks NVN for present interval 2. The community's "60 FPS Regular Game Speed" cheat for 1.1.1 does the same two things as here: it skips
+//   the interval-2 call (main+0x2aa2780; here the present interval is not followed instead, android_main.c DM_PRESENT_INTERVAL=display) and writes 16,666,667 there.
+//   Here the frame time written is the time each frame really took, in whole refreshes of 60 Hz: 16,666,667 ns for one, the game's own 33,333,334 (never more) for two
+//   or more, so the game keeps to real time when a frame comes late. Only for the 1.1.1 main build holding 33,333,334 there, in memory it may write; otherwise nothing
+static uint32_t *g_arc_step;
+static void arc_step(uint64_t frame_ns) {
+    static int init; if (!init) { init = 1;
+        const char *e = getenv("DM_FPS_TARGET"); if (!e || atoi(e) < 60) return;
+        module_t *m = NULL; for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main")) m = &g_mod[i];
+        if (!m || strncasecmp(m->build_id, "aee8f150dda1b5a838806e1a5ea6827a", 32) || m->size < 0x397e8dc) {   // (the build id may come in capitals)
+            LOG("[RED] 60 fps: not Legends: Arceus 1.1.1's main (build %s): the game's frame time left alone", m ? m->build_id : "-"); return; }
+        uint32_t *t = (uint32_t *)(m->base + 0x397e8d8);
+        if (*t != 33333334u) { LOG("[RED] 60 fps: the game's frame time is %u ns here, not 33333334: left alone, the game stays at 30", *t); return; }
+        int w = 0; FILE *f = fopen("/proc/self/maps", "r"); char ln[512];   // (writable where it is: a write to a read-only page would close the game)
+        if (f) { while (fgets(ln, sizeof ln, f)) { unsigned long lo, hi; char pm[8];
+            if (sscanf(ln, "%lx-%lx %7s", &lo, &hi, pm) == 3 && (uintptr_t)t >= lo && (uintptr_t)t + 4 <= hi) { w = pm[1] == 'w'; break; } } fclose(f); }
+        if (!w) { LOG("[RED] 60 fps: the game's frame time is in memory that is not writable: left alone"); return; }
+        g_arc_step = t; LOG("60 fps: the game's frame time follows the time each frame takes (16.7 ms, or 33.3 ms for a late frame)"); }
+    if (!g_arc_step || !frame_ns) return;
+    *g_arc_step = frame_ns >= 25000000ull ? 33333334u : 16666667u;   // (25 ms: halfway between one refresh and two)
+}
 NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     (void)q; win_t *o = (win_t *)w; o->presents++;
     dm_fps_lock_tick(); dm_res_scale_tick();
@@ -1675,6 +1697,7 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
         tpush(4, rec * tb.numer / tb.denom / 1e6); tpush(5, sub * tb.numer / tb.denom / 1e6);
     }
     if (prev_in) {
+        arc_step(t0 - prev_in);
         double fr = (t0 - prev_in) / 1e6, wk = (t0 - prev_out) / 1e6, nv = atomic_exchange(&g_nvn_ns, 0) / 1e6;
         tpush(0, fr); tpush(1, wk); tpush(2, nv);
         trow(f, "@frame_ms", fr); trow(f, "@work_ms", wk); trow(f, "@nvn_ms", nv); trow(f, "@itv", (double)present_itv(o));

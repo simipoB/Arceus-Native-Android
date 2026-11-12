@@ -836,7 +836,12 @@ static void host_start(void) {
     { const char *g = getenv("DM_GRAPHICS"); if (g && (!strcmp(g, "low") || !strcmp(g, "lowest"))) setenv("DM_OPMODE", "0", 0); else if (g && (!strcmp(g, "high") || !strcmp(g, "auto"))) setenv("DM_OPMODE", "1", 0);
       if (g && !strcmp(g, "lowest")) setenv("DM_RES_CAP", "0.75", 0); }
 #if defined(DM_GAME_ANDROID_OPMODE) && DM_GAME_ANDROID_OPMODE >= 0
-    { char m[4]; snprintf(m, sizeof m, "%d", DM_GAME_ANDROID_OPMODE); setenv("DM_OPMODE", m, 0); }   // the profile's android_op_mode (env.txt DM_OPMODE wins)
+    { char m[4]; snprintf(m, sizeof m, "%d", DM_GAME_ANDROID_OPMODE); setenv("DM_OPMODE", m, 0); }
+#if DM_GAME_PROGRAM_ID == 0x01001F5010DFA000ull   // Legends: Arceus: 60 fps only when chosen (Auto is 30); at 60 a frame every refresh (its present interval 2
+    //   left aside), the game's step following the frame time (hle_nvn.c arc_step)
+    setenv("DM_AUTO_FPS", "30", 1);
+    { const char *f = getenv("DM_FPS_TARGET"); if (f && atoi(f) >= 60) setenv("DM_PRESENT_INTERVAL", "display", 0); }
+#endif   // the profile's android_op_mode (env.txt DM_OPMODE wins)
 #endif   // real sound output (AAudio, compat/aaudio_unit.c); env.txt can set 0
     // pipelines: every one the game makes is recorded here and built ahead at the next start, the list shipped with the game too, and the driver's compiled code kept
     SETP("DM_MODS_DIR", "mods");   // IPSwitch .pchtxt code mods, applied when their build ID matches (loader.c); env.txt may point elsewhere
