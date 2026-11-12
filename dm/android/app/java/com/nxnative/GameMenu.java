@@ -307,11 +307,9 @@ public final class GameMenu {
         choice(a, "DM_RUMBLE", t(a, "Rumble"), new String[][] { { "", t(a, "On"), t(a, "On: the controller's motor, else the phone's") }, { "pad", t(a, "Controllers only"), "" },
                                                                  { "off", t(a, "Off"), "" } });
         // the left stick / movement, touch and controller alike (hle_hid.c lsens): full speed with less of the stick (Arceus-Native-Android#9: running needs a near-full push)
-        choice(a, "DM_LSTICK_SENS", t(a, "Movement stick sensitivity"), new String[][] { { "", "100 %", t(a, "As on the Switch") }, { "125", "125 %", "" },
-            { "150", "150 %", t(a, "Full speed (and running) with less of the stick") }, { "175", "175 %", "" }, { "200", "200 %", "" } });
+        slider(a, t(a, "Movement stick sensitivity"), "DM_LSTICK_SENS", 100, 200, 100, v -> v + " %");   // (drag: at 150 % full speed and running come with less of the stick)
         // the right stick / camera, touch and controller alike (hle_hid.c rsens)
-        choice(a, "DM_RSTICK_SENS", t(a, "Camera sensitivity"), new String[][] { { "50", "50 %", t(a, "Slower camera: the right stick and the touch camera turn less") }, { "75", "75 %", "" },
-            { "", "100 %", t(a, "As on the Switch") }, { "125", "125 %", "" }, { "150", "150 %", t(a, "Faster camera: full speed with less of the stick") }, { "200", "200 %", "" } });
+        slider(a, t(a, "Camera sensitivity"), "DM_RSTICK_SENS", 50, 200, 100, v -> v + " %");
         // gyro aiming (GameActivity.gyro, hle_hid.c): the phone's gyroscope turns the camera, at the camera sensitivity above
         choice(a, "DM_GYRO", t(a, "Gyro aiming"), new String[][] { { "", t(a, "Off"), t(a, "Off: moving the phone does nothing") },
             { "aim", t(a, "While aiming"), t(a, "While aiming (ZL held): turn and tilt the phone to aim") }, { "on", t(a, "Always"), t(a, "Always: turning the phone turns the camera") } });
