@@ -559,23 +559,23 @@ static void lowspec(void) {
     fprintf(stderr, "boot: lower specs %d: shorter draw distance, %s (RomFS overlay %s)\n", lv, lv == 2 ? "no shadows" : "lighter shadows", root);
 }
 // Fl4sh's "Level of Detail + QOL" for 1.1.1, its RomFS files kept in this library (qol_files.h), each behind its own setting and laid over the game's RomFS like
-//   Lower specs: Draw distance Far (DM_ARC_FAR=1: Pokémon and people loaded out to 600 instead of 40 / 60, trees to 1000 instead of 200, terrain detail 3 times
-//   further; with loader.c far_lod; not with Lower specs), Unlimited stamina (DM_ARC_STAMINA=1: player_stamina_parameter.bin), no black bars in battle
-//   (DM_ARC_NOBARS=1: battle_resident.gfpak, its battle_cinema_mask_00 panes moved off screen)
+//   Lower specs: Draw distance Far (DM_ARC_FAR=1, only when chosen: Pokémon and people loaded out to 600 instead of 40 / 60, trees to 1000 instead of 200, terrain
+//   detail 3 times further; with loader.c far_lod; not with Lower specs. The game's own work about triples: about 30 fps on a Galaxy S25+, so never on by default) and no black bars in battle (DM_ARC_NOBARS, on unless 0:
+//   battle_resident.gfpak, its battle_cinema_mask_00 panes moved off screen). (The mod's unlimited stamina is left out)
 #include "qol_files.h"
 static void qol(void) {
-    const char *f = getenv("DM_ARC_FAR"), *s = getenv("DM_ARC_STAMINA"), *b = getenv("DM_ARC_NOBARS"), *l = getenv("DM_LOWSPEC");
-    int far = f && atoi(f) == 1 && !(l && atoi(l) >= 1), st = s && atoi(s) == 1, nb = b && atoi(b) == 1;
+    const char *f = getenv("DM_ARC_FAR"), *b = getenv("DM_ARC_NOBARS"), *l = getenv("DM_LOWSPEC");
+    int far = f && atoi(f) == 1 && !(l && atoi(l) >= 1), nb = !(b && *b && atoi(b) == 0);
     char root[1100], p[1300]; snprintf(root, sizeof root, "%s/qol/romfs", g_files);
-    static const char *rel[3] = { "bin/misc/app_config/field_common_config.bin", "bin/field/player/player_stamina_parameter.bin", "bin/archive/appli/battle_resident.gfpak" };
-    const unsigned char *dat[3] = { QOL_far_draw_distance, QOL_unlimited_stamina, QOL_no_battle_bars }; size_t len[3] = { sizeof QOL_far_draw_distance, sizeof QOL_unlimited_stamina, sizeof QOL_no_battle_bars };
-    int on[3] = { far, st, nb }, any = 0, ok = 1;
-    for (int i = 0; i < 3; i++) { snprintf(p, sizeof p, "%s/%s", root, rel[i]); if (on[i]) { ok &= write_all(p, dat[i], len[i]); any = 1; } else unlink(p); }   // (a file switched off goes)
+    static const char *rel[2] = { "bin/misc/app_config/field_common_config.bin", "bin/archive/appli/battle_resident.gfpak" };
+    const unsigned char *dat[2] = { QOL_far_draw_distance, QOL_no_battle_bars }; size_t len[2] = { sizeof QOL_far_draw_distance, sizeof QOL_no_battle_bars };
+    int on[2] = { far, nb }, any = 0, ok = 1;
+    for (int i = 0; i < 2; i++) { snprintf(p, sizeof p, "%s/%s", root, rel[i]); if (on[i]) { ok &= write_all(p, dat[i], len[i]); any = 1; } else unlink(p); }   // (a file switched off goes)
     if (!any) return;
     if (!ok) { fprintf(stderr, "boot: [RED] Level of Detail + QOL: could not write %s\n", root); return; }
     const char *o = getenv("DM_ROMFS_OVERLAY"); char all[4096];
     snprintf(all, sizeof all, "%s%s%s", root, o && *o ? ":" : "", o && *o ? o : ""); setenv("DM_ROMFS_OVERLAY", all, 1);
-    fprintf(stderr, "boot: Level of Detail + QOL:%s%s%s (RomFS overlay %s)\n", far ? " far draw distance" : "", st ? " unlimited stamina" : "", nb ? " no black bars in battle" : "", root);
+    fprintf(stderr, "boot: Level of Detail + QOL:%s%s (RomFS overlay %s)\n", far ? " far draw distance" : "", nb ? " no black bars in battle" : "", root);
 }
 #else
 static void lowspec(void) { }
@@ -874,7 +874,7 @@ static void host_start(void) {
     snprintf(p, sizeof p, "%s/mods", g_files); mkdir(p, 0770);   // made by the app itself, so it can read what is put there (a folder another user made, adb's for one, it cannot)
     boot_guard(p);   // (before the mods are read: a crash with mods switches them off)
     mods_romfs(p);
-    qol();   // Legends: Arceus's Level of Detail + QOL settings (DM_ARC_FAR / DM_ARC_STAMINA / DM_ARC_NOBARS), then Lower specs ahead of them
+    qol();   // Legends: Arceus's Level of Detail + QOL settings (DM_ARC_FAR / DM_ARC_NOBARS), then Lower specs ahead of them
     lowspec();   // Legends: Arceus's "Lower specs" (DM_LOWSPEC): its RomFS files first in the overlay (after the mods: mods_romfs takes a set DM_ROMFS_OVERLAY for env.txt's choice)
     flat_normals();   // Legends: Arceus's "No reflections": its flat normal maps last in the overlay, under any mod
     SETP("DM_VK_PSO_RECORD", "vk_pipelines.bin"); SETP("DM_VK_PCACHE", "vk_pipeline_cache.bin"); SETG("DM_VK_PSO_SEED", "vk_pipelines_seed.bin");
