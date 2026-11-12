@@ -26,6 +26,48 @@ static uint8_t *g_alias; static size_t g_alias_cap;
 static _Atomic uint64_t *g_alias_bits;   // alias region page bitmap (alias_pages)
 static uint8_t *g_stack; static size_t g_stack_cap;
 // The address lies in the guest address block (every guest thread stack is here: the game's own heap or the stack region); the big-stack entry (hle_bigstack.c) uses it to decide whether to switch stacks
+// DM_SCAN_F32=<value>[,<value> ...] (a test, never on by default): every 10 s the game's readable memory (its heap and modules, from /proc/self/maps) is searched for
+//   those exact 32-bit floats, and where they are is logged (module+offset or heap+offset), with the places from the round before that no longer hold them and what
+//   they hold now. Finds the live copy of a value the game copied from its data at start (Legends: Arceus' 1/30 frame step, for a 60 fps patch at the right speed)
+#include <pthread.h>
+enum { SCAN_KEEP = 48 };
+static void *scan_f32_main(void *a) {
+    (void)a; float v[4]; int nv = 0; char buf[128]; snprintf(buf, sizeof buf, "%s", getenv("DM_SCAN_F32"));
+    for (char *t = strtok(buf, ","); t && nv < 4; t = strtok(NULL, ",")) v[nv++] = strtof(t, NULL);
+    static uintptr_t prev[4][SCAN_KEEP]; static int nprev[4];
+    for (int round = 1;; round++) {
+        sleep(10);
+        uintptr_t lo0 = (uintptr_t)g_as, hi0 = lo0 + RESERVE;
+        for (int k = 0; k < nv; k++) {
+            uint32_t bits; memcpy(&bits, &v[k], 4);
+            // the places from the round before: still the value, or what they hold now
+            for (int i = 0; i < nprev[k]; i++) { uint32_t now; memcpy(&now, (void *)prev[k][i], 4);
+                if (now != bits) { float f; memcpy(&f, &now, 4); module_t *m = module_of((void *)prev[k][i]);
+                    if (m) LOG("[scan] %g at %s+%#llx is now %g", v[k], m->name, (unsigned long long)(prev[k][i] - (uintptr_t)m->base), f);
+                    else LOG("[scan] %g at heap+%#llx is now %g", v[k], (unsigned long long)(prev[k][i] - (uintptr_t)g_heap), f); } }
+            FILE *mf = fopen("/proc/self/maps", "r"); if (!mf) break;
+            char ln[512]; long hits = 0; nprev[k] = 0; char line[1024]; int o = 0;
+            while (fgets(ln, sizeof ln, mf)) {
+                unsigned long lo, hi; char perm[8];
+                if (sscanf(ln, "%lx-%lx %7s", &lo, &hi, perm) != 3 || perm[0] != 'r') continue;
+                if (hi <= lo0 || lo >= hi0) continue; if (lo < lo0) lo = lo0; if (hi > hi0) hi = hi0;
+                if (lo >= (uintptr_t)g_heap && lo < (uintptr_t)g_heap + g_heap_cap && hi > (uintptr_t)g_heap + g_heap_cur) hi = (uintptr_t)g_heap + g_heap_cur;   // (the heap's tail may be given back)
+                for (const uint32_t *w = (const uint32_t *)lo; (uintptr_t)(w + 1) <= hi; w++) if (*w == bits) {
+                    hits++; if (nprev[k] < SCAN_KEEP) prev[k][nprev[k]++] = (uintptr_t)w;
+                    if (hits <= 12) { module_t *m = module_of(w);
+                        o += m ? snprintf(line + o, sizeof line - o, " %s+%#llx", m->name, (unsigned long long)((uintptr_t)w - (uintptr_t)m->base))
+                               : snprintf(line + o, sizeof line - o, " heap+%#llx", (unsigned long long)((uintptr_t)w - (uintptr_t)g_heap)); if (o >= (int)sizeof line) o = (int)sizeof line - 1; } }
+            }
+            fclose(mf);
+            LOG("[scan] round %d, %g: %ld places%s", round, v[k], hits, line);
+        }
+    }
+    return NULL;
+}
+static void scan_f32_start(void) {
+    static int started; if (started || !getenv("DM_SCAN_F32")) return; started = 1;
+    pthread_t t; if (!pthread_create(&t, NULL, scan_f32_main, NULL)) { pthread_detach(t); LOG("[scan] DM_SCAN_F32=%s: the game's memory searched every 10 s", getenv("DM_SCAN_F32")); }
+}
 int dm_guest_as_contains(uintptr_t a) { uintptr_t b = (uintptr_t)g_as; return g_as && a >= b && a - b < RESERVE; }
 
 static void *alias_windows_thread(void *arg);
@@ -161,7 +203,7 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
         else if (size < g_heap_cur) { madvise(g_heap + size, g_heap_cur - size, unmap_advice()); rc = mprotect(g_heap + size, g_heap_cur - size, PROT_NONE); }   // the pages back to the system now
         if (g_flag.svc) LOG("SetHeapSize %#zx -> base %p mprotect=%d errno=%d", size, g_heap, rc, errno);
         else if (size > g_heap_cur) LOG("[mem] heap %.2f GB (heap region %.2f GB)", size / 1073741824.0, g_heap_cap / 1073741824.0);
-        g_heap_cur = size;
+        g_heap_cur = size; scan_f32_start();
         regs[0] = 0; regs[1] = (uint64_t)g_heap; return 0;
     }
     case 0x02: regs[0] = 0; return 0;   // SetMemoryPermission
