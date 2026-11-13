@@ -2609,7 +2609,8 @@ static VkCommandBuffer CB(void) { return g_sub->cb; }
 // by the in-game menu (Bug reports: it writes capture.req in the game's folder, holding how many frames to wait first) or DM_VK_CAPTURE_AT=<present number>; written
 // as frame-capture.zip in the game's folder and in Download/. Nothing runs or is kept while not asked for. The Mali white scenes (#47, #53, #56) show no error in the
 // log: the pictures show which pass goes white, the notes what it read
-enum { CAPN = 192, CAPW = 320, CAPH = 180, CAPS = 256, CAPP = 12 };   // CAPS targets sampled, CAPP points each (4 x 3), 16 bytes a point
+enum { CAPN = 192, CAPS = 256, CAPP = 12 };   // CAPS targets sampled, CAPP points each (4 x 3), 16 bytes a point
+static uint32_t CAPW = 320, CAPH = 180;   // the pictures' size: DM_VK_CAPTURE_SIZE=<w>x<h> (up to 960x540: 192 of them are kept on the GPU and in a buffer), for a detail 320x180 loses
 static int g_cap_ns; static VkFormat g_cap_sfmt[CAPS]; static char g_cap_slabel[CAPS][40];
 static uint32_t fmt_texel_bytes(VkFormat f) {   // the formats render targets come in here; 0: not sampled
     switch ((int)f) {
@@ -2634,6 +2635,7 @@ static void cap_printf(const char *f, ...) {
     memcpy(g_cap_meta + g_cap_len, tmp, (size_t)n); g_cap_len += (size_t)n; g_cap_meta[g_cap_len] = 0;
 }
 static int cap_start(void) {
+    { const char *e = getenv("DM_VK_CAPTURE_SIZE"); unsigned w, h; if (e && sscanf(e, "%ux%u", &w, &h) == 2 && w >= 64 && h >= 36 && w <= 960 && h <= 540) { CAPW = w; CAPH = h; } }
     VkImageCreateInfo ci = { .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D, .format = VK_FORMAT_R8G8B8A8_UNORM, .extent = { CAPW, CAPH, 1 }, .mipLevels = 1,
         .arrayLayers = CAPN, .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT };
     if (vkCreateImage(g_dev, &ci, NULL, &g_cap_img)) return 0;
@@ -2645,7 +2647,7 @@ static int cap_start(void) {
     cap_printf("Frame capture, present %llu. GPU %s (vendor %#x, driver %#x, Vulkan %u.%u). BC textures %s; BC layer %s; float controls %s.\n", (unsigned long long)g_cap_frame, g_props.deviceName, g_props.vendorID,
                g_props.driverVersion, VK_API_VERSION_MAJOR(g_props.apiVersion), VK_API_VERSION_MINOR(g_props.apiVersion),
                nvn_fmt_vk_transcode(0x46) ? "transcoded on upload" : nvn_fmt_vk_decode(0x46) ? "decoded on upload" : "sampled by the GPU", g_bcgpu ? "on" : "off", g_fctl ? "on" : "off");
-    cap_printf("Formats are Vulkan VkFormat numbers (vk) and NVN format numbers (nvn). Pictures: NNN.png, 320x180, values above 1.0 shown as white.\n\n");
+    cap_printf("Formats are Vulkan VkFormat numbers (vk) and NVN format numbers (nvn). Pictures: NNN.png, %ux%u, values above 1.0 shown as white.\n\n", CAPW, CAPH);
     return 1;
 }
 static void cap_pass(void) {
