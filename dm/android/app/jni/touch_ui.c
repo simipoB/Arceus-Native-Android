@@ -151,6 +151,7 @@ static void layout(float w, float h) {
     { float k = size_k(); if (k != 1.0f) for (int c = 0; c < NCTL; c++) if (c != C_CAM && c != C_SEL && c != C_BACK) {
         g_c[c].r *= k; g_c[c].cx = clampf(g_c[c].cx, g_c[c].r, w - g_c[c].r); g_c[c].cy = clampf(g_c[c].cy, g_c[c].r, h - g_c[c].r); } }
     if (!l3r3_on()) g_c[C_L3].shown = g_c[C_R3].shown = 0;   // (an option, off by default: the layout editor's own choice only counts while it is on)
+    { int rs_off(void); if (rs_off()) g_c[C_RSTICK].shown = g_c[C_R3].shown = 0; }   // (DM_TOUCH_RSTICK=off: the right stick hidden, whatever the saved layout says)
     if (!g_stick_on) { g_stick_x = g_knob_x = g_c[C_STICK].cx; g_stick_y = g_knob_y = g_c[C_STICK].cy; }
 }
 // The back button: just under the open list's bottom-left corner (Arceus's four battle moves, a bag pocket), or left of its bottom row when the list reaches the
@@ -169,7 +170,7 @@ static void back_place_locked(void) {
 static int g_cam_pct = -1, g_cam_stick = -1, g_rs_off = -1;
 static int cam_pct(void) { if (g_cam_pct < 0) { const char *e = getenv("DM_TOUCH_CAM_SENS"); int v = e ? atoi(e) : 100; g_cam_pct = v < 25 || v > 300 ? 100 : v; } return g_cam_pct; }
 static int cam_stick(void) { if (g_cam_stick < 0) { const char *e = getenv("DM_TOUCH_CAMERA"); g_cam_stick = e && !strcmp(e, "stick"); } return g_cam_stick; }
-static int rs_off(void) { if (g_rs_off < 0) { const char *e = getenv("DM_TOUCH_RSTICK"); g_rs_off = e && !strcmp(e, "off"); } return g_rs_off; }
+int rs_off(void) { if (g_rs_off < 0) { const char *e = getenv("DM_TOUCH_RSTICK"); g_rs_off = e && !strcmp(e, "off"); } return g_rs_off; }
 static int ctl_off(int c) { return ((c == C_L3 || c == C_R3) && !l3r3_on()) || ((c == C_RSTICK || c == C_R3) && rs_off()); }   // left out entirely, the layout editor too
 static int hit(int c, float x, float y, float slack) {
     const ctl *k = &g_c[c]; float dx = x - k->cx, dy = y - k->cy, r = k->r * slack;
