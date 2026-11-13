@@ -560,8 +560,8 @@ void touch_ui_hide(void) { pthread_mutex_lock(&g_mu); g_visible = 0; pthread_mut
 // The app lost focus or went to the background (android_main.c): every finger let go. Android does not always send the lift or a cancel for fingers down when a
 //   panel opens over the game (the notification shade, Game Booster, the ☰ menu), and the buttons they held stayed pressed
 void touch_ui_release(void) {
-    pthread_mutex_lock(&g_mu); int n = 0;
-    for (int i = 0; i < 10; i++) { if (g_ptr[i].id >= 0) n++; g_ptr[i].id = -1; g_ep[i].id = -1; }
+    pthread_mutex_lock(&g_mu); int n = 0, seen = g_w > 0;   // (before the first touch the table is not set up yet: its zeros are no fingers)
+    for (int i = 0; i < 10; i++) { if (seen && g_ptr[i].id >= 0) n++; g_ptr[i].id = -1; g_ep[i].id = -1; }
     g_pinch.active = 0; g_aim = 0; g_cam_vx = g_cam_vy = 0; for (int c = 0; c < NCTL; c++) g_held_until[c] = 0;
     recompute_locked(); dm_input_set(g_btn, g_lx, g_ly, g_rx, g_ry);
     pthread_mutex_unlock(&g_mu);
