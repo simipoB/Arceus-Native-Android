@@ -566,8 +566,24 @@ static void lowspec(void) {
     setenv("DM_ROMFS_OVERLAY", all, 1);
     fprintf(stderr, "boot: lower specs %d: shorter draw distance, %s (RomFS overlay %s)\n", lv, lv == 2 ? "no shadows" : "lighter shadows", root);
 }
+// "Style move effects" (the settings' DM_ARC_STYLE_FX: off unless 1): the strong / agile style moves' start effects replaced by the No More Styles 1.2 mod's nearly
+//   empty ones (nostyles_files.h), laid over the game's RomFS like Lower specs. With the game's own effects, grey boxes covered the screen on Adreno and Xclipse
+//   (Arceus-Native-Android #14 #15 #20); the moves and their power are unchanged, only the full-screen animation as they start goes
+#include "nostyles_files.h"
+static void style_fx(void) {
+    const char *e = getenv("DM_ARC_STYLE_FX"); if (e && !strcmp(e, "1")) { fprintf(stderr, "boot: style move effects: the game's own (DM_ARC_STYLE_FX=1)\n"); return; }
+    char root[1100], f[1300]; snprintf(root, sizeof root, "%s/nostyles/romfs", g_files);
+    snprintf(f, sizeof f, "%s/bin/effect/battle/sequence/cmn_battle_waza_pow_start.wbin", root); int ok = write_all(f, NS_pow_start, sizeof NS_pow_start);
+    snprintf(f, sizeof f, "%s/bin/effect/battle/sequence/cmn_battle_waza_teq_start.wbin", root); ok &= write_all(f, NS_teq_start, sizeof NS_teq_start);
+    if (!ok) { fprintf(stderr, "boot: [RED] style move effects: could not write %s\n", root); return; }
+    const char *o = getenv("DM_ROMFS_OVERLAY"); char all[4096];
+    snprintf(all, sizeof all, "%s%s%s", root, o && *o ? ":" : "", o && *o ? o : "");
+    setenv("DM_ROMFS_OVERLAY", all, 1);
+    fprintf(stderr, "boot: style move effects off: the strong / agile start effects of No More Styles 1.2 (RomFS overlay %s)\n", root);
+}
 #else
 static void lowspec(void) { }
+static void style_fx(void) { }
 #endif
 // "No reflections" (profile key flat_normals, the menu's DM_FLAT_NORMALS, on unless 0): the game's terrain packs with their ground and bark normal maps made flat, made by
 //   the setup from the player's own files (dm/android/tools/flat_normals.py) into <game>/flat_normals, laid over the RomFS after every mod (hle_fs.c DM_ROMFS_OVERLAY, first
@@ -938,6 +954,7 @@ static void host_start(void) {
     boot_guard(p);   // (before the mods are read: a crash with mods switches them off)
     mods_romfs(p);
     lowspec();   // Legends: Arceus's "Lower specs" (DM_LOWSPEC): its RomFS files first in the overlay (after the mods: mods_romfs takes a set DM_ROMFS_OVERLAY for env.txt's choice)
+    style_fx();   // Legends: Arceus's "Style move effects" (off unless DM_ARC_STYLE_FX=1): the No More Styles start effects first in the overlay
     flat_normals();   // Legends: Arceus's "No reflections": its flat normal maps last in the overlay, under any mod
     SETP("DM_VK_PSO_RECORD", "vk_pipelines.bin"); SETP("DM_VK_PCACHE", "vk_pipeline_cache.bin"); SETG("DM_VK_PSO_SEED", "vk_pipelines_seed.bin");
     snprintf(q, sizeof q, "%s/shaders.pak", g_game); if (!stat(q, &st)) setenv("DM_SPV_PAK", q, 0);   // the packed shader set, else vk/b-<chain>/

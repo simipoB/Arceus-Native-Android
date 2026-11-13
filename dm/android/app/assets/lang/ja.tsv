@@ -328,3 +328,6 @@ Animated models: a render target for their capture	アニメーションモデ�
 Auto: a quick test at each start on ARM's driver decides (the log says which)	自動：ARMのドライバーで起動ごとに短いテストを行い決めます（ログに記録）
 Off: as before v0.35	オフ：v0.35以前と同じ
 On: for a driver that skips the work of a pass with nothing to draw into (invisible characters and Pokémon)	オン：描画先のないパスの処理を省くドライバー向け（キャラクターやポケモンが見えない場合）
+Style move effects	スタイル技の演出
+Off: no full-screen animation as a strong or agile style move starts (it left grey boxes on many phones); the moves work as before	オフ：力業・速業の開始時の全画面演出なし（多くの端末で灰色の四角が出ていました）。技の効果は変わりません
+On: the game's own animation (grey boxes on some phones)	オン：ゲーム本来の演出（一部の端末で灰色の四角が出ます）

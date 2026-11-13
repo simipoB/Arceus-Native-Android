@@ -328,3 +328,6 @@ Animated models: a render target for their capture	Modelos animados: un destino 
 Auto: a quick test at each start on ARM's driver decides (the log says which)	Auto: una prueba rápida en cada inicio con el driver de ARM decide (el registro dice cuál)
 Off: as before v0.35	Desactivado: como antes de la v0.35
 On: for a driver that skips the work of a pass with nothing to draw into (invisible characters and Pokémon)	Activado: para un driver que omite el trabajo de una pasada sin nada donde dibujar (personajes y Pokémon invisibles)
+Style move effects	Efectos de los estilos
+Off: no full-screen animation as a strong or agile style move starts (it left grey boxes on many phones); the moves work as before	Desactivado: sin la animación a pantalla completa al empezar un movimiento de estilo fuerte o rápido (dejaba recuadros grises en muchos teléfonos); los movimientos funcionan igual
+On: the game's own animation (grey boxes on some phones)	Activado: la animación del juego (recuadros grises en algunos teléfonos)
