@@ -331,3 +331,5 @@ On: for a driver that skips the work of a pass with nothing to draw into (invisi
 Style move effects	Effets des styles
 Off: no full-screen animation as a strong or agile style move starts (it left grey boxes on many phones); the moves work as before	Désactivé : pas d'animation plein écran au début d'une capacité en style Puissant ou Rapide (elle laissait des cadres gris sur beaucoup de téléphones) ; les capacités fonctionnent comme avant
 On: the game's own animation (grey boxes on some phones)	Activé : l'animation du jeu (cadres gris sur certains téléphones)
+Bright scenes in a wider format	Scènes éclairées dans un format plus large
+On: the lit scene is drawn in a format with more room (RGBA16F instead of R11G11B10F), a test for white or flickering pictures; uses a little more memory	Activé : la scène éclairée est dessinée dans un format plus large (RGBA16F au lieu de R11G11B10F), un test pour les images blanches ou qui clignotent ; utilise un peu plus de mémoire

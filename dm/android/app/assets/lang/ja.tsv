@@ -331,3 +331,5 @@ On: for a driver that skips the work of a pass with nothing to draw into (invisi
 Style move effects	スタイル技の演出
 Off: no full-screen animation as a strong or agile style move starts (it left grey boxes on many phones); the moves work as before	オフ：力業・速業の開始時の全画面演出なし（多くの端末で灰色の四角が出ていました）。技の効果は変わりません
 On: the game's own animation (grey boxes on some phones)	オン：ゲーム本来の演出（一部の端末で灰色の四角が出ます）
+Bright scenes in a wider format	明るい場面をより広い形式で描画
+On: the lit scene is drawn in a format with more room (RGBA16F instead of R11G11B10F), a test for white or flickering pictures; uses a little more memory	オン：明るい場面をより余裕のある形式（R11G11B10Fの代わりにRGBA16F）で描画します。白い画面やちらつきのテストです。メモリを少し多く使います

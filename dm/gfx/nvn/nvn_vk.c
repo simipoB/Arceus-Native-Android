@@ -485,6 +485,8 @@ void mtl_init(void) {
     // FMZ (spv_fmz): Maxwell's multiplies give 0 when an operand is 0, infinity and NaN included, and SPIR-V's give NaN, which a white or glowing surface can come from
     //   (a light at the eye's position: 0 x inf). Every multiply gets the rule written out: a test of the theory on the white screen of Arm's own driver (#156), off
     //   unless DM_VK_FMZ=1 (the in-game menu's Mali tests); the translator would then get it per instruction (a new shader chain)
+    // R11G11B10F render targets as RGBA16F (nvn_fmt_vk.c nvn_fmt_vk_b10_as_rgba16): a test for Mali's white lit scene, off unless DM_VK_B10_AS_RGBA16=1 (the menu's Mali tests)
+    { const char *e = getenv("DM_VK_B10_AS_RGBA16"); if (e && atoi(e) > 0) { nvn_fmt_vk_b10_as_rgba16(1); VLOG("formats: R11G11B10F drawn and sampled as RGBA16F (DM_VK_B10_AS_RGBA16, a Mali test)"); } }
     { const char *e = getenv("DM_VK_FMZ"); g_fmz = e && atoi(e) > 0;
       if (g_fmz) VLOG("shaders: a multiply by 0 gives 0 even for infinity and NaN, as on the Switch's GPU (FMZ, every multiply: DM_VK_FMZ)"); }
     { const char *e = getenv("DM_VK_NAN_MINMAX"); g_nanmm = e ? atoi(e) : g_arm_rel ? 2 : 0; if (g_nanmm < 0 || g_nanmm > 2) g_nanmm = 1;
@@ -1908,6 +1910,7 @@ static vtex *pkg_upload(const tex_t *t) {
     nvn_dirty_protect(t->mem, t->L.size); x->stamp = nvn_dirty_now();
     if (tex_upload(x, t)) { vtex_unref(x); return NULL; }
     x->pkg = 1; x->span = nvn_dirty_span(t->mem, t->L.size); x->seen = nvn_dirty_now();
+    if (nvn_fmt_vk_b10_swapped(t->d.format)) RED_ONCE(51, "a texture from the game's files in R11G11B10F with DM_VK_B10_AS_RGBA16 on: its texels do not fit RGBA16F and it comes out wrong (turn the test off)");
     return x;
 }
 static vtex *serial_get(uint64_t k) {   // caller holds g_smu

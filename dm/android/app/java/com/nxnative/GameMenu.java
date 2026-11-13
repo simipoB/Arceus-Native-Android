@@ -568,6 +568,8 @@ public final class GameMenu {
                 { "0", t(a, "Off"), t(a, "Off: the shaders as before v0.57") } });
             choice(a, "DM_VK_FMZ", t(a, "Multiply by zero as on the Switch"), new String[][] { { "", t(a, "Off"), "" },
                 { "1", t(a, "On"), t(a, "On: a multiply with a zero gives zero even when the other value is infinite, as the Switch's GPU does (a test for white or glowing surfaces; a little slower)") } });
+            choice(a, "DM_VK_B10_AS_RGBA16", t(a, "Bright scenes in a wider format"), new String[][] { { "", t(a, "Off"), "" },
+                { "1", t(a, "On"), t(a, "On: the lit scene is drawn in a format with more room (RGBA16F instead of R11G11B10F), a test for white or flickering pictures; uses a little more memory") } });
             choice(a, "DM_VK_NO_PASS_MERGE", t(a, "Merge render passes"), new String[][] { { "", t(a, "On"), "" },
                 { "1", t(a, "Off"), t(a, "Off: every render target change starts a new pass") } });
         }
