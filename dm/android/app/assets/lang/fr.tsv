@@ -333,3 +333,13 @@ Off: no full-screen animation as a strong or agile style move starts (it left gr
 On: the game's own animation (grey boxes on some phones)	Activé : l'animation du jeu (cadres gris sur certains téléphones)
 Bright scenes in a wider format	Scènes éclairées dans un format plus large
 On: the lit scene is drawn in a format with more room (RGBA16F instead of R11G11B10F), a test for white or flickering pictures; uses a little more memory	Activé : la scène éclairée est dessinée dans un format plus large (RGBA16F au lieu de R11G11B10F), un test pour les images blanches ou qui clignotent ; utilise un peu plus de mémoire
+Touch camera sensitivity	Sensibilité de la caméra tactile
+Touch camera	Caméra tactile
+Drag	Glisser
+Drag: the camera follows the finger's movement and stops when it stops	Glisser : la caméra suit le mouvement du doigt et s'arrête quand il s'arrête
+Stick	Stick
+Stick: where the finger lands is the centre; hold it away to keep turning, faster the further (hold-to-lock-on is off)	Stick : l'endroit où le doigt se pose est le centre ; maintenez-le écarté pour continuer à tourner, plus vite plus il est loin (le verrouillage par appui long est désactivé)
+Right stick on screen	Stick droit à l'écran
+Show	Afficher
+Hide	Masquer
+Hide: the camera is turned with a finger only	Masquer : la caméra se tourne seulement au doigt

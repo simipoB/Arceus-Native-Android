@@ -51,8 +51,11 @@ static void lsens(int32_t *x, int32_t *y) {
     if (m > 32767.0) { fx *= 32767.0 / m; fy *= 32767.0 / m; }
     *x = (int32_t)fx; *y = (int32_t)fy;
 }
+// The touch camera carries its own sensitivity (touch_ui.c cam_pct, DM_TOUCH_CAM_SENS): while it is the touch source's right stick, DM_RSTICK_SENS is not applied
+//   on top (Arceus-Native-Android #28: the camera slider barely changed a drag). The on-screen right stick keeps DM_RSTICK_SENS
+_Atomic int dm_touch_cam_own;
 void dm_input_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
-    rx = rsens(rx); ry = rsens(ry); lsens(&lx, &ly);
+    if (!atomic_load(&dm_touch_cam_own)) { rx = rsens(rx); ry = rsens(ry); } lsens(&lx, &ly);
     uint64_t old = atomic_exchange(&g_btn, buttons); atomic_fetch_or(&g_latch, buttons & ~old); atomic_store(&g_axes, pack(lx, ly, rx, ry));
 }
 // Gyro aiming (DM_GYRO: "aim" = while ZL is held, as the game aims; "on" = always; off by default): the phone's gyroscope turns the camera, added to the right stick

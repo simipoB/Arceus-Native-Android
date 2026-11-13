@@ -313,6 +313,11 @@ public final class GameMenu {
         slider(a, t(a, "Movement stick sensitivity"), "DM_LSTICK_SENS", 100, 200, 100, v -> v + " %");   // (drag: at 150 % full speed and running come with less of the stick)
         // the right stick / camera, touch and controller alike (hle_hid.c rsens)
         slider(a, t(a, "Camera sensitivity"), "DM_RSTICK_SENS", 50, 200, 100, v -> v + " %");
+        // the touch camera (touch_ui.c cam_pct / cam_stick, Arceus-Native-Android #28): its own speed, apart from the right stick's, and how a finger turns it
+        slider(a, t(a, "Touch camera sensitivity"), "DM_TOUCH_CAM_SENS", 25, 300, 100, v -> v + " %");
+        choice(a, "DM_TOUCH_CAMERA", t(a, "Touch camera"), new String[][] { { "", t(a, "Drag"), t(a, "Drag: the camera follows the finger's movement and stops when it stops") },
+            { "stick", t(a, "Stick"), t(a, "Stick: where the finger lands is the centre; hold it away to keep turning, faster the further (hold-to-lock-on is off)") } });
+        choice(a, "DM_TOUCH_RSTICK", t(a, "Right stick on screen"), new String[][] { { "", t(a, "Show"), "" }, { "off", t(a, "Hide"), t(a, "Hide: the camera is turned with a finger only") } });
         // gyro aiming (GameActivity.gyro, hle_hid.c): the phone's gyroscope turns the camera, at the camera sensitivity above
         choice(a, "DM_GYRO", t(a, "Gyro aiming"), new String[][] { { "", t(a, "Off"), t(a, "Off: moving the phone does nothing") },
             { "aim", t(a, "While aiming"), t(a, "While aiming (ZL held): turn and tilt the phone to aim") }, { "on", t(a, "Always"), t(a, "Always: turning the phone turns the camera") } });

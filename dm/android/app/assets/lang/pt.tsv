@@ -333,3 +333,13 @@ Off: no full-screen animation as a strong or agile style move starts (it left gr
 On: the game's own animation (grey boxes on some phones)	Ligado: a animação do próprio jogo (quadros cinza em alguns celulares)
 Bright scenes in a wider format	Cenas iluminadas em um formato mais amplo
 On: the lit scene is drawn in a format with more room (RGBA16F instead of R11G11B10F), a test for white or flickering pictures; uses a little more memory	Ligado: a cena iluminada é desenhada em um formato com mais margem (RGBA16F em vez de R11G11B10F), um teste para imagens brancas ou piscando; usa um pouco mais de memória
+Touch camera sensitivity	Sensibilidade da câmera de toque
+Touch camera	Câmera de toque
+Drag	Arrastar
+Drag: the camera follows the finger's movement and stops when it stops	Arrastar: a câmera segue o movimento do dedo e para quando ele para
+Stick	Analógico
+Stick: where the finger lands is the centre; hold it away to keep turning, faster the further (hold-to-lock-on is off)	Analógico: onde o dedo encosta é o centro; segure afastado para continuar girando, mais rápido quanto mais longe (travar mira segurando fica desligado)
+Right stick on screen	Analógico direito na tela
+Show	Mostrar
+Hide	Ocultar
+Hide: the camera is turned with a finger only	Ocultar: a câmera é girada só com o dedo

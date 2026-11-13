@@ -227,7 +227,7 @@ JNIEXPORT jboolean JNICALL Java_com_nxnative_GameMenu_nativeSetting(JNIEnv *env,
         } else now = 0;
     }
     else if (!strcmp(k, "DM_GYRO")) { extern _Atomic int dm_gyro_mode; atomic_store(&dm_gyro_mode, v && !strcmp(v, "on") ? 2 : v && !strcmp(v, "aim") ? 1 : 0); }
-    else if (!strcmp(k, "DM_TOUCH_OPACITY") || !strcmp(k, "DM_TOUCH_SIZE") || !strcmp(k, "DM_TOUCH_GESTURES") || !strcmp(k, "DM_TOUCH_FADE") || !strcmp(k, "DM_TOUCH_HAPTIC") || !strcmp(k, "DM_TOUCH_L3R3")) touch_ui_setting(k, v);
+    else if (!strcmp(k, "DM_TOUCH_OPACITY") || !strcmp(k, "DM_TOUCH_SIZE") || !strcmp(k, "DM_TOUCH_GESTURES") || !strcmp(k, "DM_TOUCH_CAM_SENS") || !strcmp(k, "DM_TOUCH_CAMERA") || !strcmp(k, "DM_TOUCH_RSTICK") || !strcmp(k, "DM_TOUCH_FADE") || !strcmp(k, "DM_TOUCH_HAPTIC") || !strcmp(k, "DM_TOUCH_L3R3")) touch_ui_setting(k, v);
     else if (!strcmp(k, "DM_RUMBLE")) { touch_ui_setting(k, v); now = 0; }
     else if (!strcmp(k, "DM_LSTICK_SENS")) { extern _Atomic int dm_lstick_pct __attribute__((weak)); int p = v ? atoi(v) : 100; if (p < 50 || p > 300) p = 100; if (&dm_lstick_pct) atomic_store(&dm_lstick_pct, p); else now = 0; }   // (hle_hid.c lsens)
     else if (!strcmp(k, "DM_RSTICK_SENS")) { extern _Atomic int dm_rstick_pct __attribute__((weak)); int p = v ? atoi(v) : 100; if (p < 25 || p > 400) p = 100; if (&dm_rstick_pct) atomic_store(&dm_rstick_pct, p); else now = 0; }   // (the touch click follows it at once; the game's motors are GameActivity's, GameMenu decides)

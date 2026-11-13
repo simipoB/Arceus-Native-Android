@@ -7,6 +7,7 @@
 // the stick is the finger's speed, back to rest as soon as the finger stops. A quick tap is held at least 80 ms (the game reads its input once a frame, every 33 ms);
 // touch areas are 1.3 times the drawing; a thumb sliding across the face buttons presses the one under it. Hidden while a controller is used, back on the next touch.
 // The layout and drawing parts also build into the Mac Vulkan host (mac_vk_build.sh), whose DM_OVL_SHOT composes them over a game frame to check the look.
+#include <stdatomic.h>
 #include "dm.h"
 #include "game_profile.h"   // DM_GAME_TOUCH_ZLZR (the profile key touch_zlzr)
 #if defined(DM_GAME_TOUCH_MENU) && DM_GAME_TOUCH_MENU
@@ -162,7 +163,14 @@ static void back_place_locked(void) {
     if (y + rad > g_h - 0.02f * g_h) { x = r[0] - gap - rad; y = r[3] - rad; }   // no room below: beside the last item
     g_c[C_BACK].cx = clampf(x, rad, g_w - rad); g_c[C_BACK].cy = clampf(y, rad, g_h - rad); g_c[C_BACK].shown = 1;
 }
-static int ctl_off(int c) { return (c == C_L3 || c == C_R3) && !l3r3_on(); }   // left out entirely, the layout editor too
+// The touch camera (Arceus-Native-Android #28): its own sensitivity (DM_TOUCH_CAM_SENS 25-300 %, apart from the right stick's DM_RSTICK_SENS), how it turns
+//   (DM_TOUCH_CAMERA: "drag" = the finger's speed, as before; "stick" = a stick under the finger, as the Persona 5 Royal Android port does: where the finger
+//   lands is the centre, and held away from it the camera keeps turning, faster the further), and whether the right stick is drawn (DM_TOUCH_RSTICK=off hides it)
+static int g_cam_pct = -1, g_cam_stick = -1, g_rs_off = -1;
+static int cam_pct(void) { if (g_cam_pct < 0) { const char *e = getenv("DM_TOUCH_CAM_SENS"); int v = e ? atoi(e) : 100; g_cam_pct = v < 25 || v > 300 ? 100 : v; } return g_cam_pct; }
+static int cam_stick(void) { if (g_cam_stick < 0) { const char *e = getenv("DM_TOUCH_CAMERA"); g_cam_stick = e && !strcmp(e, "stick"); } return g_cam_stick; }
+static int rs_off(void) { if (g_rs_off < 0) { const char *e = getenv("DM_TOUCH_RSTICK"); g_rs_off = e && !strcmp(e, "off"); } return g_rs_off; }
+static int ctl_off(int c) { return ((c == C_L3 || c == C_R3) && !l3r3_on()) || ((c == C_RSTICK || c == C_R3) && rs_off()); }   // left out entirely, the layout editor too
 static int hit(int c, float x, float y, float slack) {
     const ctl *k = &g_c[c]; float dx = x - k->cx, dy = y - k->cy, r = k->r * slack;
     return k->shown && dx * dx + dy * dy <= r * r;
@@ -343,14 +351,14 @@ static void recompute_locked(void) {
     if (g_aim && (menu || (GESTURES_ON && touch_menu_cutscene()))) g_aim = 0;   // a menu opened or a cutscene began: no aiming
     if (g_aim) b |= DM_BTN_ZR | (aim_lock() ? DM_BTN_ZL : 0);   // aiming: the throw held, and the lock-on (aim_lock)
     if (t < g_lock_until && aim_lock()) b |= DM_BTN_ZL;
-    for (int i = 0; i < 10; i++) if (GESTURES_ON && g_ptr[i].id >= 0 && g_ptr[i].target == C_CAM && !g_ptr[i].thr && !g_ptr[i].aim && !touch_menu_active() && t - g_ptr[i].t0 > 0.32 &&
+    for (int i = 0; i < 10; i++) if (GESTURES_ON && !cam_stick() && g_ptr[i].id >= 0 && g_ptr[i].target == C_CAM && !g_ptr[i].thr && !g_ptr[i].aim && !touch_menu_active() && t - g_ptr[i].t0 > 0.32 &&
                                      fabsf(g_ptr[i].x - g_ptr[i].x0) < g_h * 0.04f && fabsf(g_ptr[i].y - g_ptr[i].y0) < g_h * 0.04f) { if (!g_ptr[i].lp) fprintf(stderr, "[touch] lock on\n"); g_ptr[i].lp = 1; b |= DM_BTN_ZL; }   // press and hold: ZL (lock on)
     for (int i = 0; i < 10; i++) if (g_ptr[i].id >= 0 && g_ptr[i].lp) b |= DM_BTN_ZL;   // a throw swipe holds ZR (aim) until the finger lifts (throw)
     if (rstick || (b & (DM_BTN_UP | DM_BTN_DOWN | DM_BTN_LEFT | DM_BTN_RIGHT))) g_inner_t = t;   // held: stays clear
     g_rstick_on = rstick; if (!rstick) { g_rknob_x = g_c[C_RSTICK].cx; g_rknob_y = g_c[C_RSTICK].cy; }
     if (!stick) { g_stick_on = 0; g_stick_x = g_knob_x = g_c[C_STICK].cx; g_stick_y = g_knob_y = g_c[C_STICK].cy; }
     // the camera: the finger's speed, full turn at about a screen height per 0.6 s, at rest within 60 ms of the finger stopping
-    float vmax = g_h / 0.6f; if (t - g_cam_t > 0.06 || (menu && !map)) g_cam_vx = g_cam_vy = 0;
+    float vmax = g_h / 0.6f * 100.0f / (float)cam_pct(); if (t - g_cam_t > 0.06 || (menu && !map)) g_cam_vx = g_cam_vy = 0;   // (the touch camera's own sensitivity: full turn with a slower drag above 100 %)
     { int aiming = g_aim; for (int i = 0; i < 10; i++) if (g_ptr[i].id >= 0 && (g_ptr[i].thr || g_ptr[i].lp || g_ptr[i].target == C_THROW)) aiming = 1;
       if (aiming) vmax *= 100.0f / AIM_FINE_PCT; }   // aiming / locked on: finer (the same drag turns less)
     // a drag up / down on an open menu (outside the controls) scrolls its list while the finger stays down, faster the further it is from where it landed (past
@@ -373,8 +381,17 @@ static void recompute_locked(void) {
         else g_pinch_d0 = 0;
     }
     g_btn = b; g_lx = ax(lx); g_ly = ax(ly);
+    { extern _Atomic int dm_touch_cam_own __attribute__((weak)); if (&dm_touch_cam_own) atomic_store(&dm_touch_cam_own, !rstick && !map); }   // (hle_hid.c: the touch camera has its own sensitivity, the right stick's is not applied again)
     if (map) { g_rx = rstick ? ax(rx) : 0; g_ry = rstick ? ax(ry) : 0; }   // (the map's right stick is its own: no camera drag)
     else if (rstick) { g_rx = ax(rx); g_ry = ax(ry); }
+    else if (cam_stick()) {   // a stick under the finger: its offset from where it landed, full at 12 % of the screen height (less at a higher sensitivity), a small dead zone
+        float sx = 0, sy = 0;
+        if (!menu) for (int i = 0; i < 10; i++) if (g_ptr[i].id >= 0 && !g_ptr[i].pm && g_ptr[i].target == C_CAM && !g_ptr[i].thr) {
+            float r = g_h * 0.12f * 100.0f / (float)cam_pct(), dx = (g_ptr[i].x - g_ptr[i].x0) / r, dy = (g_ptr[i].y - g_ptr[i].y0) / r, m = sqrtf(dx * dx + dy * dy);
+            if (m > 0.08f) { float k = fminf(1.0f, (m - 0.08f) / 0.92f) / m; sx = dx * k; sy = -dy * k; }
+            break; }
+        if (g_aim) { sx *= AIM_FINE_PCT / 100.0f; sy *= AIM_FINE_PCT / 100.0f; }
+        g_rx = ax(sx); g_ry = ax(sy); }
     else { static float ex, ey; static double et; double dt = et > 0 ? t - et : 0; et = t;
         float k = dt > 0 ? 1.0f - expf(-(float)dt / 0.07f) : 1.0f, tx = g_cam_vx / vmax, ty = -g_cam_vy / vmax;
         ex += (tx - ex) * k; ey += (ty - ey) * k; if (fabsf(ex) < 0.01f && tx == 0) ex = 0; if (fabsf(ey) < 0.01f && ty == 0) ey = 0;
@@ -667,6 +684,9 @@ void touch_ui_setting(const char *key, const char *value) {
     else if (!strcmp(key, "DM_TOUCH_GESTURES")) g_field_gest = !(value && !strcmp(value, "off"));
     else if (!strcmp(key, "DM_TOUCH_SIZE")) { float v = value ? (float)atof(value) : 100.0f; g_size = (v < 80 || v > 130 ? 100.0f : v) / 100.0f; g_w = g_h = 0; }   // (laid out again at the next frame)
     else if (!strcmp(key, "DM_TOUCH_L3R3")) { g_l3r3 = value && !strcmp(value, "on"); g_w = g_h = 0; }   // (laid out again on the next frame)
+    else if (!strcmp(key, "DM_TOUCH_CAM_SENS")) { int v = value ? atoi(value) : 100; g_cam_pct = v < 25 || v > 300 ? 100 : v; }
+    else if (!strcmp(key, "DM_TOUCH_CAMERA")) g_cam_stick = value && !strcmp(value, "stick");
+    else if (!strcmp(key, "DM_TOUCH_RSTICK")) { g_rs_off = value && !strcmp(value, "off"); g_w = g_h = 0; }
 #ifdef __ANDROID__
     else { void touch_ui_haptic_setting(const char *, const char *); touch_ui_haptic_setting(key, value); }   // DM_TOUCH_HAPTIC, DM_RUMBLE
 #endif
