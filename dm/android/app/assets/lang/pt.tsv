@@ -48,7 +48,7 @@ Delete this mod from the phone?	Excluir este mod do celular?
 Deleted: applies the next time you start the game.	Excluído: vale a partir da próxima vez que você iniciar o jogo.
 Display	Tela
 Done	Concluído
-Drag a control to move it, pinch to resize, double-tap to hide. Hold − for 2 s to save (hold + to reset).	Arraste um controle para movê-lo, faça pinça para redimensionar, toque duas vezes para ocultar. Segure − por 2 s para salvar (segure + para redefinir).
+Drag a control to move it, pinch to resize, double-tap to hide. Hold − for 2 s to save (hold + and − together to reset).	Arraste um controle para movê-lo, faça pinça para redimensionar, toque duas vezes para ocultar. Segure − por 2 s para salvar (segure + e − juntos para redefinir).
 Edit notes	Editar notas
 Enter both the server and the room code.	Insira o servidor e o código da sala.
 Export save data	Exportar dados salvos
@@ -322,3 +322,9 @@ Camera sensitivity	Sensibilidade da câmera
 Slower camera: the right stick and the touch camera turn less	Câmera mais lenta: o analógico direito e a câmera por toque giram menos
 As on the Switch	Como no Switch
 Faster camera: full speed with less of the stick	Câmera mais rápida: velocidade máxima com menos curso do analógico
+Auto: on for a Mali-G615 on ARM's driver older than r49, which needed it to start	Auto: ligado num Mali-G615 com o driver da ARM anterior ao r49, que precisava disso para iniciar
+Off: the GPU reads the game's uniform data directly (a test for invisible characters and Pokémon; if the game then closes at start, set Auto again)	Desligado: a GPU lê diretamente os dados uniformes do jogo (um teste para personagens e Pokémon invisíveis; se o jogo fechar ao iniciar, volte para Auto)
+Animated models: a render target for their capture	Modelos animados: um alvo de renderização para a captura
+Auto: a quick test at each start on ARM's driver decides (the log says which)	Auto: um teste rápido a cada início com o driver da ARM decide (o registro diz qual)
+Off: as before v0.35	Desligado: como antes da v0.35
+On: for a driver that skips the work of a pass with nothing to draw into (invisible characters and Pokémon)	Ligado: para um driver que pula o trabalho de uma passagem sem nada onde desenhar (personagens e Pokémon invisíveis)

@@ -327,7 +327,7 @@ public final class GameMenu {
             { "", t(a, "On"), t(a, "On: tap = A, swipe up = throw, left / right = L / R, down = X, taps on the item bubbles") },
             { "off", t(a, "Off"), t(a, "Off: the screen only turns the camera; use the buttons (menus still take taps)") } });   // (touch_ui.c size_k: every control, the moved ones too)
         slider(a, t(a, "Fade after"), "DM_TOUCH_FADE", 0, 10, 3, v -> v == 0 ? t(a, "never fade") : t(a, "%d s without a touch", v));
-        action(a, t(a, "Move the touch controls"), t(a, "Drag a control to move it, pinch to resize, double-tap to hide. Hold − for 2 s to save (hold + to reset)."), () -> {
+        action(a, t(a, "Move the touch controls"), t(a, "Drag a control to move it, pinch to resize, double-tap to hide. Hold − for 2 s to save (hold + and − together to reset)."), () -> {
             if (dlg != null) dlg.dismiss(); try { nativeEditTouch(); } catch (UnsatisfiedLinkError e) { } });
     }
     // Remapping (PadMapping.java, DM_PAD_MAPPING): tap a Switch button, then press the controller key for it (the panel takes the key: remapKey)
@@ -550,8 +550,15 @@ public final class GameMenu {
         if (DriverPackages.gpu(a).contains("mali")) {
             heading(a, t(a, "White screen tests (Mali)"));
             note(a, t(a, "Try one at a time, restart the game, and tell us on GitHub whether the picture changed (a capture helps)."));
-            choice(a, "DM_VK_UBO_SNAPSHOT", t(a, "Copy the game's uniform data"), new String[][] { { "", t(a, "Off"), "" },
+            // (Auto: mtl_init turns it on for a Mali-G615 on ARM's driver before r49; "0" is a real Off there, for the invisible-models tests of Arceus-Native-Android#6)
+            choice(a, "DM_VK_UBO_SNAPSHOT", t(a, "Copy the game's uniform data"), new String[][] { { "", t(a, "Auto"), t(a, "Auto: on for a Mali-G615 on ARM's driver older than r49, which needed it to start") },
+                { "0", t(a, "Off"), t(a, "Off: the GPU reads the game's uniform data directly (a test for invisible characters and Pokémon; if the game then closes at start, set Auto again)") },
                 { "1", t(a, "On"), t(a, "On: each draw's uniform data is copied when it is recorded, instead of the GPU reading the game's memory directly") } });
+            // transform feedback captures (nvn_vk.c tf_selftest.h): Auto = the start-up test on ARM's driver decides
+            if (GameSettings.arceus(a)) choice(a, "DM_VK_TF_ATT", t(a, "Animated models: a render target for their capture"), new String[][] {
+                { "", t(a, "Auto"), t(a, "Auto: a quick test at each start on ARM's driver decides (the log says which)") },
+                { "0", t(a, "Off"), t(a, "Off: as before v0.35") },
+                { "1", t(a, "On"), t(a, "On: for a driver that skips the work of a pass with nothing to draw into (invisible characters and Pokémon)") } });
             choice(a, "DM_VK_FLOAT_CONTROLS", t(a, "Exact infinities in shaders"), new String[][] { { "", t(a, "Auto"), t(a, "Auto: on with ARM's driver (v0.52)") },
                 { "0", t(a, "Off"), t(a, "Off: the shaders as before v0.52") } });
             choice(a, "DM_VK_NAN_MINMAX", t(a, "Min / max as on the Switch"), new String[][] { { "", t(a, "Auto"), t(a, "Auto: on with ARM's driver (v0.57)") },

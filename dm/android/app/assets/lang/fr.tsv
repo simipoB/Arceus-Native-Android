@@ -48,7 +48,7 @@ Delete this mod from the phone?	Supprimer ce mod du téléphone ?
 Deleted: applies the next time you start the game.	Supprimé : s'applique au prochain lancement du jeu.
 Display	Affichage
 Done	Terminé
-Drag a control to move it, pinch to resize, double-tap to hide. Hold − for 2 s to save (hold + to reset).	Faites glisser une commande pour la déplacer, pincez pour la redimensionner, touchez deux fois pour la masquer. Maintenez − 2 s pour enregistrer (maintenez + pour réinitialiser).
+Drag a control to move it, pinch to resize, double-tap to hide. Hold − for 2 s to save (hold + and − together to reset).	Faites glisser une commande pour la déplacer, pincez pour la redimensionner, touchez deux fois pour la masquer. Maintenez − 2 s pour enregistrer (maintenez + et − ensemble pour réinitialiser).
 Edit notes	Modifier les notes
 Enter both the server and the room code.	Saisissez le serveur et le code du salon.
 Export save data	Exporter la sauvegarde
@@ -322,3 +322,9 @@ Camera sensitivity	Sensibilité de la caméra
 Slower camera: the right stick and the touch camera turn less	Caméra plus lente : le stick droit et la caméra tactile tournent moins
 As on the Switch	Comme sur Switch
 Faster camera: full speed with less of the stick	Caméra plus rapide : pleine vitesse avec moins de course du stick
+Auto: on for a Mali-G615 on ARM's driver older than r49, which needed it to start	Auto : activé sur un Mali-G615 avec le pilote d'ARM antérieur à r49, qui en avait besoin pour démarrer
+Off: the GPU reads the game's uniform data directly (a test for invisible characters and Pokémon; if the game then closes at start, set Auto again)	Désactivé : le GPU lit directement les données uniformes du jeu (un test pour les personnages et Pokémon invisibles ; si le jeu se ferme au démarrage, remettez Auto)
+Animated models: a render target for their capture	Modèles animés : une cible de rendu pour leur capture
+Auto: a quick test at each start on ARM's driver decides (the log says which)	Auto : un test rapide à chaque démarrage avec le pilote d'ARM décide (le journal indique lequel)
+Off: as before v0.35	Désactivé : comme avant la v0.35
+On: for a driver that skips the work of a pass with nothing to draw into (invisible characters and Pokémon)	Activé : pour un pilote qui saute le travail d'une passe sans rien où dessiner (personnages et Pokémon invisibles)

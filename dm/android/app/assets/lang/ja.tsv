@@ -48,7 +48,7 @@ Delete this mod from the phone?	このModを端末から削除しますか？
 Deleted: applies the next time you start the game.	削除しました：次にゲームを起動したときに反映されます。
 Display	表示
 Done	完了
-Drag a control to move it, pinch to resize, double-tap to hide. Hold − for 2 s to save (hold + to reset).	ドラッグで移動、ピンチでサイズ変更、ダブルタップで非表示。−を2秒長押しで保存（+の長押しでリセット）。
+Drag a control to move it, pinch to resize, double-tap to hide. Hold − for 2 s to save (hold + and − together to reset).	ドラッグで移動、ピンチでサイズ変更、ダブルタップで非表示。−を2秒長押しで保存（+と−を同時に長押しでリセット）。
 Edit notes	メモを編集
 Enter both the server and the room code.	サーバーとルームコードの両方を入力してください。
 Export save data	セーブデータを書き出す
@@ -322,3 +322,9 @@ Camera sensitivity	カメラ感度
 Slower camera: the right stick and the touch camera turn less	カメラが遅くなります：右スティックとタッチ操作の回転が小さくなります
 As on the Switch	Switchと同じ
 Faster camera: full speed with less of the stick	カメラが速くなります：少ない入力で最高速度に達します
+Auto: on for a Mali-G615 on ARM's driver older than r49, which needed it to start	自動：r49より前のARMのドライバーのMali-G615でオン（起動に必要でした）
+Off: the GPU reads the game's uniform data directly (a test for invisible characters and Pokémon; if the game then closes at start, set Auto again)	オフ：GPUがゲームのユニフォームデータを直接読みます（キャラクターやポケモンが見えない問題のテスト。起動時にゲームが閉じる場合は自動に戻してください）
+Animated models: a render target for their capture	アニメーションモデル：キャプチャ用のレンダーターゲット
+Auto: a quick test at each start on ARM's driver decides (the log says which)	自動：ARMのドライバーで起動ごとに短いテストを行い決めます（ログに記録）
+Off: as before v0.35	オフ：v0.35以前と同じ
+On: for a driver that skips the work of a pass with nothing to draw into (invisible characters and Pokémon)	オン：描画先のないパスの処理を省くドライバー向け（キャラクターやポケモンが見えない場合）
