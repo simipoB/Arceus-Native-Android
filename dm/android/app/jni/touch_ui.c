@@ -34,7 +34,8 @@ enum { C_STICK, C_CAM, C_RSTICK, C_A, C_B, C_X, C_Y, C_L, C_R, C_ZL, C_ZR, C_PLU
 typedef struct { float cx, cy, r; int glyph, shown; uint64_t btn; } ctl;
 static ctl g_c[NCTL];
 static float g_w, g_h;
-static struct { int32_t id; int target; float x0, y0, x, y, lx, ly; double lt, t0; int thr, lp, aim; } g_ptr[10];   // (aim: this finger landed while aiming: its lift throws)
+static struct { int32_t id; int target; float x0, y0, x, y, lx, ly; double lt, t0; int thr, lp, aim, pm, held_log; } g_ptr[10];   // (aim: this finger landed while aiming: its lift throws)
+// (pm: this finger was down before the open menu opened: it does nothing in the menu until it lifts; held_log: its long hold was logged)
 static int g_aim;   // aiming after a tap on the throw button: ZR held until the throw   // (thr: this finger's swipe became a throw)   // (t0: when the finger landed)   // fingers down: id, what they hold, where, last move (camera)
 static uint64_t g_btn; static int32_t g_lx, g_ly, g_rx, g_ry;
 static double g_held_until[NCTL];                   // the 80 ms minimum press
@@ -313,8 +314,14 @@ static void recompute_locked(void) {
     uint64_t b = 0; float lx = 0, ly = 0, rx = 0, ry = 0; int stick = 0, rstick = 0; double t = now_s();
     int menu = GESTURES_ON && touch_menu_active();   // a menu open: fingers tap and swipe its lists (touch_ui_event), the stick and the camera stay still
     int map = menu && touch_menu_map();   // the map: a finger drags it (the left stick at the finger's speed, the content following the finger), two pinch it (ZL / ZR)
+    // Fingers already down when a menu opens (the thumb turning the camera or on the stick while the other pressed X / +) do nothing in it until they lift. They
+    //   kept the place they landed in the field, so the menu read a camera drag as a scroll drag far past its dead zone and ran through the Pokédex / Satchel
+    //   by itself, and a thumb resting on the stick moved its cursor (Arceus-Native-Android#7 / #12, with the touch gestures off too). Buttons held stay held
+    { static int was; if (menu && !was) for (int i = 0; i < 10; i++) if (g_ptr[i].id >= 0 && g_ptr[i].target < C_A) { g_ptr[i].pm = 1; fprintf(stderr, "[touch] a menu opened under a finger (%s): it is ignored there until it lifts\n", g_ptr[i].target == C_STICK ? "stick" : g_ptr[i].target == C_CAM ? "camera" : "right stick"); }
+      if (!menu) for (int i = 0; i < 10; i++) g_ptr[i].pm = 0;
+      was = menu; }
     for (int i = 0; i < 10; i++) {
-        if (g_ptr[i].id < 0) continue;
+        if (g_ptr[i].id < 0 || g_ptr[i].pm) continue;
         int c = g_ptr[i].target;
         if (c == C_STICK) { float r = g_c[C_STICK].r, dx = g_ptr[i].x - g_stick_x, dy = g_ptr[i].y - g_stick_y, d = sqrtf(dx * dx + dy * dy);
             if (d > r) { dx *= r / d; dy *= r / d; }
@@ -349,14 +356,14 @@ static void recompute_locked(void) {
     // a drag up / down on an open menu (outside the controls) scrolls its list while the finger stays down, faster the further it is from where it landed (past
     // a dead zone; full speed at a fifth of the screen height); finger up = further down the list (touch_menu.c steps the selection, stopping at the list's ends)
     float mry = 0; int mscroll = 0;
-    for (int i = 0; i < 10; i++) if (GESTURES && menu && !map && g_ptr[i].id >= 0 && g_ptr[i].target == C_CAM) {   // (the stick's finger moves the stick)
+    for (int i = 0; i < 10; i++) if (GESTURES && menu && !map && g_ptr[i].id >= 0 && !g_ptr[i].pm && g_ptr[i].target == C_CAM) {   // (the stick's finger moves the stick)
         float dx = g_ptr[i].x - g_ptr[i].x0, dy = g_ptr[i].y - g_ptr[i].y0, dz = g_h * 0.04f;
         if (fabsf(dy) < dz || fabsf(dy) < fabsf(dx)) continue;
         float v = (fabsf(dy) - dz) / (g_h * 0.2f); if (v > 1) v = 1; if (v < 0.3f) v = 0.3f;   // (the game ignores a slight tilt)
         mry = dy < 0 ? -v : v; mscroll = 1; }
     touch_menu_drag_rate(mscroll ? mry : 0);   // (touch_menu.c steps the list; taps wait for the drag to end)
     if (map) {   // one finger on the map: it follows the finger (full stick at half the screen height a second); two: a pinch, steps of an eighth of their distance
-        int nf = 0, f[2] = { -1, -1 }; for (int i = 0; i < 10; i++) if (g_ptr[i].id >= 0 && g_ptr[i].target == C_CAM) { if (nf < 2) f[nf] = i; nf++; }
+        int nf = 0, f[2] = { -1, -1 }; for (int i = 0; i < 10; i++) if (g_ptr[i].id >= 0 && !g_ptr[i].pm && g_ptr[i].target == C_CAM) { if (nf < 2) f[nf] = i; nf++; }
         if (nf == 1 && !stick) { float vm = g_h / 0.5f; lx = clampf(-g_cam_vx / vm, -1, 1); ly = clampf(g_cam_vy / vm, -1, 1); }
         if (nf == 2) { float d = hypotf(g_ptr[f[0]].x - g_ptr[f[1]].x, g_ptr[f[0]].y - g_ptr[f[1]].y);
             if (g_pinch_d0 <= 0) g_pinch_d0 = d;
@@ -376,7 +383,7 @@ static void recompute_locked(void) {
 // ---------- the layout editor: hold − for 2 s to enter; drag a control to move it, pinch on it to resize it, double-tap it to hide / show it;
 // hold + for 2 s to go back to the default layout; hold − for 2 s again to save and leave. The game gets no input meanwhile ----------
 static double g_edit_hold_t;   // (g_edit_hold_t: when the hold that toggles the editor started)
-static struct { int32_t id; int c; float ox, oy, x0, y0; double t0; } g_ep[10];
+static struct { int32_t id; int c; float ox, oy, x0, y0; double t0; int mv; } g_ep[10];   // (mv: the finger moved from where it landed: dragging, not a hold)
 static struct { int c, active; float d0, r0; } g_pinch;
 static int g_last_tap_c = -1; static double g_last_tap_t;
 static int edit_hit(float x, float y) {   // the smallest control (shown or not) under the finger
@@ -402,12 +409,13 @@ static void edit_event(const AInputEvent *e) {
             float fx = g_ep[i].x0, fy = g_ep[i].y0;
             for (size_t q = 0; q < AMotionEvent_getPointerCount(e); q++) if (AMotionEvent_getPointerId(e, q) == g_ep[i].id) { fx = AMotionEvent_getX(e, q); fy = AMotionEvent_getY(e, q); }
             float dx = x - fx, dy = y - fy; c = g_ep[i].c; g_pinch.c = c; g_pinch.active = 1; g_pinch.d0 = sqrtf(dx * dx + dy * dy) + 1; g_pinch.r0 = g_c[c].r; break; }
-        for (int i = 0; i < 10; i++) if (g_ep[i].id < 0) { g_ep[i].id = AMotionEvent_getPointerId(e, k); g_ep[i].c = c; g_ep[i].x0 = x; g_ep[i].y0 = y; g_ep[i].t0 = now_s();
+        for (int i = 0; i < 10; i++) if (g_ep[i].id < 0) { g_ep[i].id = AMotionEvent_getPointerId(e, k); g_ep[i].c = c; g_ep[i].x0 = x; g_ep[i].y0 = y; g_ep[i].t0 = now_s(); g_ep[i].mv = 0;
             g_ep[i].ox = c >= 0 ? g_c[c].cx - x : 0; g_ep[i].oy = c >= 0 ? g_c[c].cy - y : 0; break; }
     } else if (act == AMOTION_EVENT_ACTION_MOVE) {
         float px[10], py[10]; int n = 0;
         for (size_t k = 0; k < AMotionEvent_getPointerCount(e); k++) { int32_t id = AMotionEvent_getPointerId(e, k); float x = AMotionEvent_getX(e, k), y = AMotionEvent_getY(e, k);
             for (int i = 0; i < 10; i++) if (g_ep[i].id == id && g_ep[i].c >= 0) {
+                if (fabsf(x - g_ep[i].x0) > g_h * 0.03f || fabsf(y - g_ep[i].y0) > g_h * 0.03f) g_ep[i].mv = 1;
                 if (g_pinch.active && g_pinch.c == g_ep[i].c) { if (n < 10) { px[n] = x; py[n] = y; n++; } }
                 else { int c = g_ep[i].c; g_c[c].cx = clampf(x + g_ep[i].ox, g_c[c].r, g_w - g_c[c].r); g_c[c].cy = clampf(y + g_ep[i].oy, g_c[c].r, g_h - g_c[c].r); edit_store(c); } } }
         if (g_pinch.active && n >= 2) { float dx = px[0] - px[1], dy = py[0] - py[1]; int c = g_pinch.c;
@@ -423,11 +431,14 @@ static void edit_event(const AInputEvent *e) {
             g_ep[i].id = -1; }
     }
 }
-// the 2-second holds, checked once a frame (a finger held still sends no events): − toggles the editor (saving on the way out), + in the editor resets the layout
+// the 2-second holds, checked once a frame (a finger held still sends no events): − toggles the editor (saving on the way out), + and − held together in the
+//   editor reset the layout. Only fingers held still count: + alone used to reset it, so dragging + to a new place for 2 s threw the whole layout away
+//   (Arceus-Native-Android#17); a held − with + down too waits for the reset instead of leaving the editor
 static void edit_holds_locked(void) {
     double t = now_s(); int minus = 0, plus = 0;
-    if (g_edit) { for (int i = 0; i < 10; i++) if (g_ep[i].id >= 0 && !g_pinch.active) { if (g_ep[i].c == C_MINUS) minus = 1; if (g_ep[i].c == C_PLUS) plus = 1; } }
+    if (g_edit) { for (int i = 0; i < 10; i++) if (g_ep[i].id >= 0 && !g_ep[i].mv && !g_pinch.active) { if (g_ep[i].c == C_MINUS) minus = 1; if (g_ep[i].c == C_PLUS) plus = 1; } }
     else for (int i = 0; i < 10; i++) if (g_ptr[i].id >= 0 && g_ptr[i].target == C_MINUS) minus = 1;
+    if (g_edit && plus && !minus) { g_edit_hold_t = 0; return; }   // + alone: nothing (it is being placed)
     if (!minus && !plus) { g_edit_hold_t = 0; return; }
     if (!g_edit_hold_t) { g_edit_hold_t = t; return; }
     if (t - g_edit_hold_t < 2.0) return;
@@ -453,7 +464,7 @@ void touch_ui_event(const AInputEvent *e, float w, float h, uint64_t *btn, int32
         int t = target_at(x, y);
         if (t >= 0) for (int i = 0; i < 10; i++) if (g_ptr[i].id < 0) {
             if (t == C_STICK || t == C_CAM) for (int j = 0; j < 10; j++) if (g_ptr[j].id >= 0 && (g_ptr[j].target == C_STICK || g_ptr[j].target == C_CAM) && now_s() - g_ptr[j].t0 < 0.25) g_two_t = now_s();
-            g_ptr[i].thr = g_ptr[i].lp = 0; g_ptr[i].aim = g_aim && (t == C_RSTICK || t == C_CAM); g_ptr[i].id = AMotionEvent_getPointerId(e, k); g_ptr[i].target = t; g_ptr[i].x0 = g_ptr[i].x = g_ptr[i].lx = x; g_ptr[i].y0 = g_ptr[i].y = g_ptr[i].ly = y; g_ptr[i].lt = g_ptr[i].t0 = now_s();
+            g_ptr[i].thr = g_ptr[i].lp = g_ptr[i].pm = g_ptr[i].held_log = 0; g_ptr[i].aim = g_aim && (t == C_RSTICK || t == C_CAM); g_ptr[i].id = AMotionEvent_getPointerId(e, k); g_ptr[i].target = t; g_ptr[i].x0 = g_ptr[i].x = g_ptr[i].lx = x; g_ptr[i].y0 = g_ptr[i].y = g_ptr[i].ly = y; g_ptr[i].lt = g_ptr[i].t0 = now_s();
             if (t >= C_A && t != C_THROW && t != C_LOCK) g_held_until[t] = now_s() + 0.08;
             if (t == C_LOCK) { g_lockon = !g_lockon; fprintf(stderr, "[touch] lock-on %s\n", g_lockon ? "on" : "off"); }
             if (t == C_RSTICK || (t >= C_UP && t <= C_RIGHT)) g_inner_t = now_s();
@@ -474,7 +485,7 @@ void touch_ui_event(const AInputEvent *e, float w, float h, uint64_t *btn, int32
             g_aim = !g_aim; if (!g_aim) g_lock_until = now_s() + 0.25; fprintf(stderr, "[touch] %s\n", g_aim ? "aiming: right stick or a drag on the right aims, lifting it throws" : "throw"); }
         // gestures outside the controls (stick or camera area): a quick tap (under 0.25 s, barely moved) is a tap on a menu item while a menu shows (touch_menu.c),
         // else, on the camera side, A (talk, pick up, investigate); two fingers tapping together are B (back)
-        for (int i = 0; i < 10; i++) if (g_ptr[i].id == id && (g_ptr[i].target == C_CAM || (g_ptr[i].target == C_STICK && !touch_menu_active())) && !g_ptr[i].thr && now_s() - g_ptr[i].t0 < 0.3 &&
+        for (int i = 0; i < 10; i++) if (g_ptr[i].id == id && !g_ptr[i].pm && (g_ptr[i].target == C_CAM || (g_ptr[i].target == C_STICK && !touch_menu_active())) && !g_ptr[i].thr && now_s() - g_ptr[i].t0 < 0.3 &&
                                          fabsf(g_ptr[i].x - g_ptr[i].x0) < g_h * 0.02f && fabsf(g_ptr[i].y - g_ptr[i].y0) < g_h * 0.02f) {
             double t = now_s();
             if (t - g_two_t < 0.4 && (field_gest() || touch_menu_active())) { g_two_t = 0; g_tap_mute = t + 0.3; if (g_aim) { g_aim = 0; for (int j = 0; j < 10; j++) g_ptr[j].aim = 0; fprintf(stderr, "[touch] aim cancelled\n"); }   // two fingers: B, and no throw
@@ -487,7 +498,7 @@ void touch_ui_event(const AInputEvent *e, float w, float h, uint64_t *btn, int32
         }
         // swipes on an open menu (outside the controls): left / right move across its list, one item per 0.08 of the screen height travelled (finger left =
         // the next one to the right); up / down scroll it with the right stick while the finger is down (recompute_locked)
-        for (int i = 0; i < 10; i++) if (GESTURES && g_ptr[i].id == id && g_ptr[i].target == C_CAM && touch_menu_active() && !touch_menu_map()) {
+        for (int i = 0; i < 10; i++) if (GESTURES && g_ptr[i].id == id && !g_ptr[i].pm && g_ptr[i].target == C_CAM && touch_menu_active() && !touch_menu_map()) {
             float sx = g_ptr[i].x - g_ptr[i].x0, sy = g_ptr[i].y - g_ptr[i].y0, d = fmaxf(fabsf(sx), fabsf(sy));
             if (d < g_h * 0.05f) continue;
             int n = (int)(d / (g_h * 0.08f) + 0.5f); if (n < 1) n = 1; if (n > 5) n = 5;
@@ -515,6 +526,13 @@ void touch_ui_event(const AInputEvent *e, float w, float h, uint64_t *btn, int32
         for (int i = 0; i < 10; i++) if (g_ptr[i].id == id && g_ptr[i].target == C_MENU && hit(C_MENU, g_ptr[i].x, g_ptr[i].y, 1.5f)) { click_locked(); front_open_menu(0); }
         for (int i = 0; i < 10; i++) if (g_ptr[i].id == id) { if (g_ptr[i].target == C_CAM) g_cam_vx = g_cam_vy = 0; g_ptr[i].id = -1; }
     }
+    // A finger the system never lifted: every move (and every new finger) lists all fingers down, so one held here that the event does not list has gone without
+    //   its UP (a system gesture or panel took it). It let go of its button or stick then; before, it stayed pressed until the next first finger (ghost presses)
+    if (act == AMOTION_EVENT_ACTION_MOVE || act == AMOTION_EVENT_ACTION_POINTER_DOWN)
+        for (int i = 0; i < 10; i++) if (g_ptr[i].id >= 0) { int seen = 0;
+            for (size_t k = 0; k < AMotionEvent_getPointerCount(e) && !seen; k++) seen = AMotionEvent_getPointerId(e, k) == g_ptr[i].id;
+            if (!seen) { static int nl; if (nl++ < 20) fprintf(stderr, "[touch] a finger on control %d was never lifted by the system: let go\n", g_ptr[i].target);
+                if (g_ptr[i].target == C_CAM) g_cam_vx = g_cam_vy = 0; g_ptr[i].id = -1; } }
     if (act == AMOTION_EVENT_ACTION_MOVE || act == AMOTION_EVENT_ACTION_DOWN || act == AMOTION_EVENT_ACTION_POINTER_DOWN)
         for (size_t k = 0; k < AMotionEvent_getPointerCount(e); k++) {
             int32_t id = AMotionEvent_getPointerId(e, k);
@@ -539,6 +557,16 @@ void touch_ui_event(const AInputEvent *e, float w, float h, uint64_t *btn, int32
     pthread_mutex_unlock(&g_mu);
 }
 void touch_ui_hide(void) { pthread_mutex_lock(&g_mu); g_visible = 0; pthread_mutex_unlock(&g_mu); }
+// The app lost focus or went to the background (android_main.c): every finger let go. Android does not always send the lift or a cancel for fingers down when a
+//   panel opens over the game (the notification shade, Game Booster, the ☰ menu), and the buttons they held stayed pressed
+void touch_ui_release(void) {
+    pthread_mutex_lock(&g_mu); int n = 0;
+    for (int i = 0; i < 10; i++) { if (g_ptr[i].id >= 0) n++; g_ptr[i].id = -1; g_ep[i].id = -1; }
+    g_pinch.active = 0; g_aim = 0; g_cam_vx = g_cam_vy = 0; for (int c = 0; c < NCTL; c++) g_held_until[c] = 0;
+    recompute_locked(); dm_input_set(g_btn, g_lx, g_ly, g_rx, g_ry);
+    pthread_mutex_unlock(&g_mu);
+    if (n) fprintf(stderr, "[touch] focus lost with %d finger%s down: let go\n", n, n == 1 ? "" : "s");
+}
 // GameActivity.java: a controller connected hides the controls at once (no input needed first); the last one disconnected shows them again
 void touch_ui_pad(int connected) { pthread_mutex_lock(&g_mu); g_visible = !connected; if (!connected) g_touch_t = now_s(); pthread_mutex_unlock(&g_mu); }
 #else
@@ -555,6 +583,9 @@ void touch_ui_demo(int c, float dx, float dy) {
 static void frame_input_locked(void) {
     edit_holds_locked(); if (g_edit) return;   // (the editor: the game gets nothing)
     uint64_t b0 = g_btn; int32_t l0 = g_lx, l1 = g_ly, r0 = g_rx, r1 = g_ry;
+    { double t = now_s();   // a button held by a finger for 5 s, once a finger (a palm or a resting thumb on Down / Up: the ghost presses of #7)
+      for (int i = 0; i < 10; i++) if (g_ptr[i].id >= 0 && !g_ptr[i].held_log && g_ptr[i].target >= C_A && g_ptr[i].target != C_THROW && t - g_ptr[i].t0 > 5.0) { g_ptr[i].held_log = 1;
+          static int nl; if (nl++ < 30) fprintf(stderr, "[touch] control %d held 5 s by a finger at (%.0f, %.0f) of %.0fx%.0f\n", g_ptr[i].target, g_ptr[i].x, g_ptr[i].y, g_w, g_h); } }
     recompute_locked();
     if (g_btn != b0 || g_lx != l0 || g_ly != l1 || g_rx != r0 || g_ry != r1) dm_input_set(g_btn, g_lx, g_ly, g_rx, g_ry);   // (the left stick too: a menu drag lets go of it at a list's edge)
 }
