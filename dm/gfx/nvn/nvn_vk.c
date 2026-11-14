@@ -3101,6 +3101,10 @@ static VkBlendOp bop(int e) { switch (e) { case 2: return VK_BLEND_OP_SUBTRACT; 
 static VkFormat vfmt_for(int nvn_fmt, int ct) {
     int fc; VkFormat f = (VkFormat)nvn_vfmt_to_vk(nvn_fmt, &fc);
     if (!f) return VK_FORMAT_UNDEFINED;
+    // (Eden's notes: Qualcomm's drivers read USCALED / SSCALED vertex formats wrong; noted once with whether the driver lists them for vertex buffers)
+    if (nvn_fmt >= 0x51 && nvn_fmt <= 0x68 && fc == 0) { VkFormatProperties fp; vkGetPhysicalDeviceFormatProperties(g_pd, f, &fp);
+        RED_ONCE(61, "vertex format %#x is integers read as floats (Vulkan format %d, scaled): the driver %s it for vertex buffers", nvn_fmt, (int)f,
+                 fp.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT ? "lists" : "does NOT list"); }
     if (ct == fc || (ct == 0 && fc == 0)) return f;
     static const VkFormat U[] = { VK_FORMAT_R8_UINT, VK_FORMAT_R8G8_UINT, VK_FORMAT_R8G8B8_UINT, VK_FORMAT_R8G8B8A8_UINT, VK_FORMAT_R16_UINT, VK_FORMAT_R16G16_UINT, VK_FORMAT_R16G16B16_UINT, VK_FORMAT_R16G16B16A16_UINT, VK_FORMAT_R32_UINT, VK_FORMAT_R32G32_UINT, VK_FORMAT_R32G32B32_UINT, VK_FORMAT_R32G32B32A32_UINT };
     static const VkFormat I[] = { VK_FORMAT_R8_SINT, VK_FORMAT_R8G8_SINT, VK_FORMAT_R8G8B8_SINT, VK_FORMAT_R8G8B8A8_SINT, VK_FORMAT_R16_SINT, VK_FORMAT_R16G16_SINT, VK_FORMAT_R16G16B16_SINT, VK_FORMAT_R16G16B16A16_SINT, VK_FORMAT_R32_SINT, VK_FORMAT_R32G32_SINT, VK_FORMAT_R32G32B32_SINT, VK_FORMAT_R32G32B32A32_SINT };
