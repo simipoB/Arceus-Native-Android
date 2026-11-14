@@ -8,6 +8,9 @@
 > [!NOTE]
 > **No game files, code, shaders or keys are included.** You need your own copy of the game.
 
+> [!IMPORTANT]
+> **AI disclaimer.** Much of Arceus Native's code, including the engine, the graphics fixes and the reverse engineering of the game, was written with the help of AI coding tools. It's tested on real phones before each release, but it's an unofficial fan project and may have bugs that hurt performance, show graphics glitches or crash the game. Back up your saves, and report problems with a log ([CONTRIBUTING.md](CONTRIBUTING.md)).
+
 ## Install
 
 1. Install `ArceusNative.apk` from [Releases](https://github.com/simipoB/Arceus-Native-Android/releases) (or [build it](docs/BUILDING.md)).
