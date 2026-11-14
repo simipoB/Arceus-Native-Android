@@ -37,6 +37,8 @@
 
 ## What's new
 
+- **Graphics fixes (v0.39).** Exploded and stretched polygons on older Adreno drivers (Vulkan 1.1) are fixed: vertex sizes are now built into each pipeline there (`DM_VK_NO_EDS=0` goes back). Background pipeline building (`DM_VK_ASYNC_PSO`) is now off everywhere, as it left objects missing for frames. Relaxed barriers are Adreno-only (dark, flickering shadows on Xclipse, PowerVR and Mali). PowerVR converts BC textures on the CPU (purple objects).
+
 - **Mali crash fix (v0.21).** Arm's driver makes more screen buffers than the game asks for (14 for 8 on a Mali-G57). The game had room for 8, so on some Mali phones the driver closed it a few frames in. It now has room for 32 and uses the count the driver reports.
 - **Multiply by zero as on the Switch (Mali test, v0.21).** On the Switch's GPU, 0 × infinity is 0. On phones it's NaN, which can show as white, black or missing surfaces. Turning on ☰ → White screen tests (Mali) → *Multiply by zero as on the Switch* rewrites each shader's SPIR-V as it loads so that every multiply follows the Switch's rule. Off by default and a little slower; tell us in an issue if it changes your screen.
 - **CPU pinning (v0.22).** The game keeps its two busiest threads on the phone's fastest cores. When a hot phone slows those cores down, the threads are now never squeezed onto fewer cores than there are threads. A hot Galaxy Z Flip5 had put both on one slowed core.
