@@ -344,3 +344,10 @@ Show	Mostrar
 Hide	Ocultar
 Hide: the camera is turned with a finger only	Ocultar: la cámara se gira solo con el dedo
 AMD FidelityFX Super Resolution 1: edge-aware upscaling, then sharpening (Sharpness sets how much)	AMD FidelityFX Super Resolution 1: escalado que respeta los bordes y luego nitidez (Nitidez ajusta cuánta)
+Colour	Color
+Natural	Natural
+Natural: the colours as the game draws them	Natural: los colores tal como los dibuja el juego
+Vibrant	Vivo
+Vibrant: muted colours lifted, a touch more contrast (less grey haze)	Vivo: los colores apagados se avivan, un poco más de contraste (menos bruma gris)
+Cinematic	Cinemático
+Cinematic: stronger contrast, a slightly warm tone	Cinemático: más contraste y un tono ligeramente cálido
