@@ -390,9 +390,14 @@ void mtl_init(void) {
     int eds = old ? x_eds && fed.extendedDynamicState : 1;
     if (!timeline && g_tlsem) { g_tlsem = 0; VLOG("timeline semaphores listed but not supported: a fence for each submission instead"); }
     g_dynren = dynren && !(getenv("DM_VK_NO_DYNREN") && atoi(getenv("DM_VK_NO_DYNREN")));
-    g_eds = eds && !(getenv("DM_VK_NO_EDS") && atoi(getenv("DM_VK_NO_EDS")));
+    // Qualcomm's Vulkan 1.1 drivers (Adreno 6xx / 710 stock, API 1.1.x) misread vertex strides passed per draw (vkCmdBindVertexBuffers2): exploded, stretched
+    //   polygons across the view (Arceus #34, Galar #209). Built into each pipeline there unless DM_VK_NO_EDS=0
+    const char *ne = getenv("DM_VK_NO_EDS");
+    int old_qc = g_props.vendorID == 0x5143 && VK_API_VERSION_MINOR(g_props.apiVersion) < 2 && VK_API_VERSION_MAJOR(g_props.apiVersion) == 1;
+    g_eds = eds && !(ne ? atoi(ne) != 0 : old_qc);
     VLOG("passes: %s; draw state: %s", g_dynren ? "dynamic rendering" : dynren ? "render passes (DM_VK_NO_DYNREN)" : "render passes (the driver has no dynamic rendering)",
-         g_eds ? "set per draw (extended dynamic state)" : eds ? "built into each pipeline (DM_VK_NO_EDS)" : "built into each pipeline (the driver has no extended dynamic state)");
+         g_eds ? "set per draw (extended dynamic state)" : !eds ? "built into each pipeline (the driver has no extended dynamic state)"
+               : ne ? "built into each pipeline (DM_VK_NO_EDS)" : "built into each pipeline (Qualcomm Vulkan 1.1 driver: per-draw vertex strides drawn wrong; DM_VK_NO_EDS=0 to try)");
     if (!fcc.depthClipControl) g_clipctl = 0;
     // custom border colours are made without a format (sampler_get), which needs customBorderColorWithoutFormat: a driver without it gets the nearest standard colour
     if (!fbc.customBorderColors || !fbc.customBorderColorWithoutFormat) { if (fbc.customBorderColors) VLOG("custom border colours need a format on this driver: the nearest standard colour instead"); g_border = 0; }
