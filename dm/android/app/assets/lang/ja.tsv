@@ -384,3 +384,5 @@ NaN fix + textures: the same, and broken values read from textures become 0 too.
 This version translates the game's shaders differently: updating them now. Your files aren't needed and your save is kept. Keep this screen open; it takes about as long as the shader step of a setup.	このバージョンではゲームのシェーダーの変換方法が変わりました：今すぐ更新します。ファイルは不要で、セーブデータはそのままです。この画面を開いたままにしてください。セットアップのシェーダー手順と同じくらい時間がかかります。
 Setting up	セットアップ
 Keep the phone cooler: half the workers (setup takes longer)	端末を熱くしにくくする：ワーカーを半分にします（セットアップに時間がかかります）
+Detailed performance log	詳細なパフォーマンスログ
+On: the log records where each frame's time goes, for a report about slowdowns or stutter. A little slower: turn it off after. From the next start	オン：各フレームの時間の使い道をログに記録します。カクつきや遅さの報告用です。少し遅くなるので、終わったらオフにしてください。次回起動から

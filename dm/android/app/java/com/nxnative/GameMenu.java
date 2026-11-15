@@ -570,6 +570,9 @@ public final class GameMenu {
             { "full", t(a, "Every pass"), t(a, "Every pass: the safest picture, slower") } });
         // a frame capture for a bug report (nvn_vk.c, Frame capture): the engine reads capture.req (frames to wait, so the menu can be closed first) and writes the ZIP
         heading(a, t(a, "Bug reports"));
+        // both profilers for a report (android_main.c DM_PERF_REPORT): a little slower, from the next start
+        choice(a, "DM_PERF_REPORT", t(a, "Detailed performance log"), new String[][] { { "", t(a, "Off"), "" },
+            { "1", t(a, "On"), t(a, "On: the log records where each frame's time goes, for a report about slowdowns or stutter. A little slower: turn it off after. From the next start") } });
         action(a, t(a, "Capture a frame"), t(a, "Close this menu within 3 seconds and stay where the problem shows: the next frame is saved, step by step, as pictures and notes in Download (a ZIP ending in frame-capture.zip). Attach it to your issue."),
                () -> { try (java.io.FileWriter w = new java.io.FileWriter(new File(GameSettings.dir(a), "capture.req"))) { w.write("90"); } catch (IOException e) { }
                        android.widget.Toast.makeText(a, t(a, "Capturing in 3 seconds: close the menu."), android.widget.Toast.LENGTH_LONG).show(); });

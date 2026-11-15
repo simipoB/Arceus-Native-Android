@@ -397,3 +397,5 @@ NaN fix + textures: the same, and broken values read from textures become 0 too.
 This version translates the game's shaders differently: updating them now. Your files aren't needed and your save is kept. Keep this screen open; it takes about as long as the shader step of a setup.	Cette version traduit les shaders du jeu autrement : mise à jour en cours. Tes fichiers ne sont pas nécessaires et ta sauvegarde est conservée. Garde cet écran ouvert ; cela prend autant de temps que l'étape des shaders de l'installation.
 Setting up	Installation
 Keep the phone cooler: half the workers (setup takes longer)	Garder le téléphone plus frais : moitié moins de processus (l'installation est plus longue)
+Detailed performance log	Journal de performances détaillé
+On: the log records where each frame's time goes, for a report about slowdowns or stutter. A little slower: turn it off after. From the next start	Activé : le journal note où passe le temps de chaque image, pour un signalement de ralentissements ou de saccades. Un peu plus lent : désactive-le ensuite. Au prochain démarrage

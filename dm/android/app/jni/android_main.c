@@ -951,7 +951,11 @@ static void host_start(void) {
 #endif   // the profile's android_op_mode (env.txt DM_OPMODE wins)
 #endif   // real sound output (AAudio, compat/aaudio_unit.c); env.txt can set 0
     // pipelines: every one the game makes is recorded here and built ahead at the next start, the list shipped with the game too, and the driver's compiled code kept
-    SETP("DM_MODS_DIR", "mods");   // IPSwitch .pchtxt code mods, applied when their build ID matches (loader.c); env.txt may point elsewhere
+    SETP("DM_MODS_DIR", "mods");
+    // Detailed performance log (☰ → Bug reports, DM_PERF_REPORT=1): both profilers on for a player's report. Every 300 frames the log then says how much of each frame our
+    //   layer spends turning the game's commands into Vulkan (DM_NVN_PROF: per function, the top 5) and where inside the replay it goes (DM_VK_PROF: passes, pipelines,
+    //   descriptors, draws). Without them a long frame's "game CPU" could not be told apart from ours (44,000 long frames in 65 player logs: 68 % of them that kind)
+    { const char *pr = getenv("DM_PERF_REPORT"); if (pr && atoi(pr) > 0) { setenv("DM_NVN_PROF", "1", 0); setenv("DM_VK_PROF", "1", 0); fprintf(stderr, "boot: detailed performance log on (DM_PERF_REPORT)\n"); } }   // IPSwitch .pchtxt code mods, applied when their build ID matches (loader.c); env.txt may point elsewhere
     snprintf(p, sizeof p, "%s/mods", g_files); mkdir(p, 0770);   // made by the app itself, so it can read what is put there (a folder another user made, adb's for one, it cannot)
     boot_guard(p);   // (before the mods are read: a crash with mods switches them off)
     mods_romfs(p);
