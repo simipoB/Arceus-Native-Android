@@ -70,6 +70,7 @@ static uint64_t mono_ns(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC
 static VkInstance g_inst; static VkPhysicalDevice g_pd; static VkDevice g_dev; static VkQueue g_q; static uint32_t g_qf;
 static VkPhysicalDeviceProperties g_props; static VkPhysicalDeviceMemoryProperties g_memp;
 static int g_has_swapchain, g_host_import, g_clipctl, g_border, g_divisor, g_eds2, g_moltenvk;
+static int g_gpl;   // pipeline libraries in use (pso_gpl.h, DM_VK_GPL)
 // Passes as dynamic rendering (1) or as Vulkan 1.0 render passes (0: rend_begin); draw state set per draw (1, extended dynamic state) or built into each pipeline (0: sst).
 //   0 where the driver lacks them (Arm's r3x drivers for Mali-G57 / G68 / G77 / G78, Vulkan 1.1: A25 5G); DM_VK_NO_DYNREN=1 / DM_VK_NO_EDS=1 force 0 on any driver
 static int g_dynren = 1, g_eds = 1;
@@ -294,7 +295,11 @@ void mtl_init(void) {
     if ((g_border = has_ext(de, nde, "VK_EXT_custom_border_color"))) dext[ndext++] = "VK_EXT_custom_border_color";
     if ((g_divisor = !as_mali && has_ext(de, nde, "VK_EXT_vertex_attribute_divisor"))) dext[ndext++] = "VK_EXT_vertex_attribute_divisor";
     if ((g_eds2 = has_ext(de, nde, "VK_EXT_extended_dynamic_state2"))) dext[ndext++] = "VK_EXT_extended_dynamic_state2";
-    int compctl = has_ext(de, nde, "VK_EXT_image_compression_control"); if (compctl) dext[ndext++] = "VK_EXT_image_compression_control";   // to read whether render targets stay compressed
+    int compctl = has_ext(de, nde, "VK_EXT_image_compression_control"); if (compctl) dext[ndext++] = "VK_EXT_image_compression_control";
+    // pipeline libraries (pso_gpl.h): opt-in, DM_VK_GPL=1, until measured on phones
+    int x_gpl = getenv("DM_VK_GPL") && atoi(getenv("DM_VK_GPL")) > 0 && has_ext(de, nde, "VK_EXT_graphics_pipeline_library") && has_ext(de, nde, "VK_KHR_pipeline_library");
+    if (x_gpl) { dext[ndext++] = "VK_KHR_pipeline_library"; dext[ndext++] = "VK_EXT_graphics_pipeline_library"; }
+    else if (getenv("DM_VK_GPL") && atoi(getenv("DM_VK_GPL")) > 0) VLOG("pipeline libraries: asked for, but this driver lists no VK_EXT_graphics_pipeline_library");   // to read whether render targets stay compressed
     if (getenv("DM_VK_NO_HOST_IMPORT")) g_host_import = 0;
     // Imported host memory pins the game's pools (about 3 GB) for every submission. Samsung's Xclipse driver of the late-2026 One UI update refuses that a few frames into play
     // (vkQueueSubmit: VK_ERROR_OUT_OF_HOST_MEMORY with a gigabyte free, #39), so on Xclipse the driver's own memory backs the pools instead (as on Mali); elsewhere a
@@ -379,6 +384,8 @@ void mtl_init(void) {
     void *opt = g_eds2 ? (void *)&fe2 : g_divisor ? (void *)&fdv : g_clipctl ? (void *)&fcc : g_border ? (void *)&fbc : NULL;
     VkPhysicalDeviceImageCompressionControlFeaturesEXT fic = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_COMPRESSION_CONTROL_FEATURES_EXT, .pNext = opt };
     if (compctl) opt = &fic;
+    VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT fgl = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_FEATURES_EXT, .pNext = opt };
+    if (x_gpl) opt = &fgl;
     // Vulkan 1.3: its own feature blocks. Older devices: the blocks of their version plus the extensions' own structures (the 1.2 / 1.3 blocks are not allowed there)
     //   (an extension's structure only when it is enabled: dynamic rendering and extended dynamic state may be missing on an old driver)
     VkPhysicalDeviceExtendedDynamicStateFeaturesEXT fed = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT };
@@ -406,6 +413,12 @@ void mtl_init(void) {
          g_eds ? "set per draw (extended dynamic state)" : !eds ? "built into each pipeline (the driver has no extended dynamic state)"
                : ne ? "built into each pipeline (DM_VK_NO_EDS)" : "built into each pipeline (Qualcomm Vulkan 1.1 driver: per-draw vertex strides drawn wrong; DM_VK_NO_EDS=0 to try)");
     if (!fcc.depthClipControl) g_clipctl = 0;
+    if (x_gpl) {   // (pso_gpl.h) only with fast linking: without it a link costs a whole compile and nothing is won
+        VkPhysicalDeviceGraphicsPipelineLibraryPropertiesEXT gp = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_PROPERTIES_EXT };
+        VkPhysicalDeviceProperties2 pp2 = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &gp }; vkGetPhysicalDeviceProperties2(g_pd, &pp2);
+        g_gpl = fgl.graphicsPipelineLibrary && gp.graphicsPipelineLibraryFastLinking;
+        VLOG("pipeline libraries: %s (feature %d, fast linking %d)", g_gpl ? "on: pipelines are linked from parts made once (DM_VK_GPL)" : "off on this driver", fgl.graphicsPipelineLibrary, gp.graphicsPipelineLibraryFastLinking);
+    }
     // custom border colours are made without a format (sampler_get), which needs customBorderColorWithoutFormat: a driver without it gets the nearest standard colour
     if (!fbc.customBorderColors || !fbc.customBorderColorWithoutFormat) { if (fbc.customBorderColors) VLOG("custom border colours need a format on this driver: the nearest standard colour instead"); g_border = 0; }
     // Mali-G615 on Arm's own driver before r49 (the G615 MC2's r44p1) closed the game three frames in (addr 0x90 in libGLES_mali.so: #63 #65 #82 #105 #112) unless its
@@ -3190,6 +3203,7 @@ static void pso_record_s(const vprog *pr, const pkey *k, const sst *s) {   // ca
     fwrite(&r, sizeof r, 1, g_psorec_s); fflush(g_psorec_s);
 }
 static VkPipeline pso_make(vprog *pr, pkey k, const sst *ss);
+#include "pso_gpl.h"
 // ---- Pipelines kept (Arm's driver, phones under 7.5 GB): at most pso_cap(), the ones unused longest destroyed. Arm's driver keeps ~0.4 MB of the process's memory
 //   and a GPU mapping for each pipeline: 5500 of them were 2.3 GB of malloc and 61k mappings when a Mali-G720 closed after ~30 minutes in another Android port of a Switch game;
 //   here the Mali players' apps held 1.7-2.6 GB against 1 GB on an Adreno (Shield builds ~1500 at start). Every 300 presents (pso_evict), over the
@@ -3472,6 +3486,7 @@ static VkPipeline pso_make(vprog *pr, pkey k, const sst *ss) {
     //   is made without the cache on PowerVR; every other pipeline, and every other GPU, keeps it
     VkPipelineCache pc_ = g_pcache;
     if (g_props.vendorID == 0x1010 && !g_dynren) for (uint32_t i = 0; i < ncb; i++) if (!cf[i]) { pc_ = VK_NULL_HANDLE; break; }
+    if (g_gpl) { VkPipeline lp = gpl_link(&gi, pc_); if (lp) return lp; }   // (pipeline libraries: pso_gpl.h; else the whole pipeline below)
     VkResult r = vkCreateGraphicsPipelines(g_dev, pc_, 1, &gi, NULL, &p);
     if (r == VK_INCOMPLETE && p) { RED_ONCE(107, "graphics pipeline creation answered VK_INCOMPLETE (out of spec; Mali, Adreno 5xx): the pipeline it made is used"); r = VK_SUCCESS; }
     if (r) { VLOG("[RED] graphics pipeline (vertex %s fragment %s) failed: %d", vs->key, fs ? fs->key : "-", r); return VK_NULL_HANDLE; }
