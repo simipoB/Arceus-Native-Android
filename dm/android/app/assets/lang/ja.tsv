@@ -384,3 +384,4 @@ NaN fix + textures: the same, and broken values read from textures become 0 too.
 This version translates the game's shaders differently: updating them now. Your files aren't needed and your save is kept. Keep this screen open; it takes about as long as the shader step of a setup.	このバージョンではゲームのシェーダーの変換方法が変わりました：今すぐ更新します。ファイルは不要で、セーブデータはそのままです。この画面を開いたままにしてください。セットアップのシェーダー手順と同じくらい時間がかかります。
 Setting up	セットアップ
 Keep the phone cooler: half the workers (setup takes longer)	端末を熱くしにくくする：ワーカーを半分にします（セットアップに時間がかかります）
+While aiming (ZL or ZR held, as when throwing a Poké Ball): turn and tilt the phone to aim	狙うとき（ZLかZRを押している間。モンスターボールを投げるときなど）：端末を回したり傾けたりして狙います

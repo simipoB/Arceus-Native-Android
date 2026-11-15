@@ -163,7 +163,8 @@ static void fill(NpadState *s, uint32_t id, uint32_t style) {
     if (now_ns() < atomic_load(&g_auto_until) || dm_guest_frame() < atomic_load(&g_auto_frame)) b |= atomic_load(&g_auto_btn);
     uint64_t k = atomic_load(&g_axes), p = atomic_load(&g_pad_axes);
     s->lx = pick(ax(k, 0), ax(p, 0)); s->ly = pick(ax(k, 1), ax(p, 1)); s->rx = pick(ax(k, 2), ax(p, 2)); s->ry = pick(ax(k, 3), ax(p, 3));
-    { int gm = gyro_mode(); if (gm && (gm == 2 || (b & (1u << 8))) && now_ns() - atomic_load(&g_gyro_t) < 100000000ull) {   // (bit 8: ZL)
+    // (aiming: ZL, the lock-on, or ZR, held to aim a throw: Legends: Arceus aims a Poké Ball with ZR, so a throw without a lock-on had no gyro)
+    { int gm = gyro_mode(); if (gm && (gm == 2 || (b & (DM_BTN_ZL | DM_BTN_ZR))) && now_ns() - atomic_load(&g_gyro_t) < 100000000ull) {
         uint64_t g = atomic_load(&g_gyro); int32_t x = s->rx + ax(g, 2), y = s->ry + ax(g, 3);
         s->rx = x > 32767 ? 32767 : x < -32767 ? -32767 : x; s->ry = y > 32767 ? 32767 : y < -32767 ? -32767 : y; } }
     b &= 0xffffull;

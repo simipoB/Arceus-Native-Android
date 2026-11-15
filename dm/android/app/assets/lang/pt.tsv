@@ -397,3 +397,4 @@ NaN fix + textures: the same, and broken values read from textures become 0 too.
 This version translates the game's shaders differently: updating them now. Your files aren't needed and your save is kept. Keep this screen open; it takes about as long as the shader step of a setup.	Esta versão traduz os shaders do jogo de outro jeito: atualizando agora. Seus arquivos não são necessários e seu save é mantido. Deixe esta tela aberta; leva o mesmo tempo que a etapa de shaders da instalação.
 Setting up	Configuração
 Keep the phone cooler: half the workers (setup takes longer)	Manter o celular mais fresco: metade dos processos (a configuração demora mais)
+While aiming (ZL or ZR held, as when throwing a Poké Ball): turn and tilt the phone to aim	Ao mirar (ZL ou ZR pressionado, como ao lançar uma Poké Bola): gire e incline o celular para mirar

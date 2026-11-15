@@ -335,7 +335,7 @@ public final class GameMenu {
         choice(a, "DM_TOUCH_RSTICK", t(a, "Right stick on screen"), new String[][] { { "", t(a, "Show"), "" }, { "off", t(a, "Hide"), t(a, "Hide: the camera is turned with a finger only") } });
         // gyro aiming (GameActivity.gyro, hle_hid.c): the phone's gyroscope turns the camera, at the camera sensitivity above
         choice(a, "DM_GYRO", t(a, "Gyro aiming"), new String[][] { { "", t(a, "Off"), t(a, "Off: moving the phone does nothing") },
-            { "aim", t(a, "While aiming"), t(a, "While aiming (ZL held): turn and tilt the phone to aim") }, { "on", t(a, "Always"), t(a, "Always: turning the phone turns the camera") } });
+            { "aim", t(a, "While aiming"), t(a, "While aiming (ZL or ZR held, as when throwing a Poké Ball): turn and tilt the phone to aim") }, { "on", t(a, "Always"), t(a, "Always: turning the phone turns the camera") } });
         heading(a, t(a, "Touch controls"));
         // L3 / R3 (pressing the sticks, touch_ui.c): off by default, Sword and Shield hardly use them (the left stick whistles in the Wild Area)
         choice(a, "DM_TOUCH_L3R3", t(a, "L3 / R3 buttons"), new String[][] { { "", t(a, "Off"), t(a, "Off: no L3 / R3 on screen (a controller's stick buttons still work)") },
