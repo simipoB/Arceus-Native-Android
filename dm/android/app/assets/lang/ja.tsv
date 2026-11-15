@@ -384,3 +384,4 @@ NaN fix + textures: the same, and broken values read from textures become 0 too.
 This version translates the game's shaders differently: updating them now. Your files aren't needed and your save is kept. Keep this screen open; it takes about as long as the shader step of a setup.	このバージョンではゲームのシェーダーの変換方法が変わりました：今すぐ更新します。ファイルは不要で、セーブデータはそのままです。この画面を開いたままにしてください。セットアップのシェーダー手順と同じくらい時間がかかります。
 Setting up	セットアップ
 Keep the phone cooler: half the workers (setup takes longer)	端末を熱くしにくくする：ワーカーを半分にします（セットアップに時間がかかります）
+This phone's own graphics driver has no Vulkan 1.1, which the game needs: it won't run with it. On some Adreno phones a custom driver (Graphics driver, below) adds it.	この端末の標準グラフィックドライバーには、ゲームに必要なVulkan 1.1がありません。このままでは動きません。一部のAdreno端末では、カスタムドライバー（下の「グラフィックドライバー」）で使えるようになります。

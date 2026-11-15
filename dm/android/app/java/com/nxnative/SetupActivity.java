@@ -155,6 +155,11 @@ public final class SetupActivity extends Activity {
         TextView title = text(root, first && many ? getApplicationInfo().loadLabel(getPackageManager()).toString() : gameName(), 26, 0xFFF2F3F5, true); title.setGravity(Gravity.CENTER);
         title.setPadding(0, px(10), 0, 0);
         if (!official) { TextView u = text(root, unofficial(), 13, 0xffff5252, false); u.setGravity(Gravity.CENTER); }
+        // Vulkan 1.0 phones: the translated shaders are SPIR-V 1.3 with subgroup operations (the Switch GPU's shuffles and votes), which only Vulkan 1.1 and newer have,
+        //   so the game cannot run on the phone's own driver there. Said here, before an hour of setup, not after it (android.hardware.vulkan.version: 1.1 = 0x401000)
+        if (!getPackageManager().hasSystemFeature(android.content.pm.PackageManager.FEATURE_VULKAN_HARDWARE_VERSION, 0x401000)) {
+            TextView v = text(root, T.t(this, "This phone's own graphics driver has no Vulkan 1.1, which the game needs: it won't run with it. On some Adreno phones a custom driver (Graphics driver, below) adds it."), 13, 0xffff5252, false);
+            v.setGravity(Gravity.CENTER); v.setPadding(px(8), px(4), px(8), px(4)); }
         TextView note = text(root, first ? T.t(this, "Welcome! To play, set up %s from your own Switch dump. It takes three steps.", many ? gamesNamed() : gameName())
                                            + "\n" + T.t(this, "No game files or keys come with this app; yours never leave the phone.")
                                          : T.t(this, "Set the game up from your own dump. No game files or keys come with this app; yours never leave the phone."), 14, 0xFFA9AFBA, false);
