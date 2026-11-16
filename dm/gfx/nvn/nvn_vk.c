@@ -2448,6 +2448,14 @@ static vshader *shader_load(const uint8_t key[8], int st) {
             if (st == 0) { free(glcode); glcode = NULL; snprintf(p, sizeof p, "%s/%s.gl.spv", g_live_dir, hex); glcode = file_read(p, &ngl); }
         }
     }
+    // Our own shaders in place of the game's (shader_override/<hash>.spv in the game's files folder, next to the pipeline cache): a cheaper version of a costly effect,
+    //   chosen with the pass times (DM_VK_PASS_TIMES). Only the SPIR-V is replaced: the game's reflection (bindings, inputs, outputs) is kept, so a replacement keeps the
+    //   original's interface. DM_VK_NO_OVERRIDE=1 leaves every shader as the game made it
+    if (code && !getenv("DM_VK_NO_OVERRIDE")) { const char *pc = getenv("DM_VK_PCACHE"); if (pc) {
+        char op[1200]; snprintf(op, sizeof op, "%s", pc); char *sl = strrchr(op, '/');
+        if (sl) { snprintf(sl + 1, sizeof op - (size_t)(sl + 1 - op), "shader_override/%s.spv", hex); size_t on = 0; uint32_t *oc = file_read(op, &on);
+            if (oc && on >= 20 && oc[0] == 0x07230203u) { free(code); code = oc; ns = on; free(glcode); glcode = NULL; ngl = 0; VLOG("shader %s: our own version (shader_override, %zu bytes)", hex, on); }
+            else free(oc); } } }
     if (!code || !meta) { VLOG("[RED] shader %s: %s missing", hex, !code ? "SPIR-V" : "reflection (.vkr)"); free(code); free(meta); free(glcode); return NULL; }
     meta = realloc(meta, nr + 1); meta[nr] = 0;
     vshader *s = calloc(1, sizeof *s); strcpy(s->key, hex); s->stage = st; s->shift = stage_shift(st);
@@ -2817,11 +2825,54 @@ static void cap_present(uint64_t n) {
     if (st == 2) { atomic_store(&g_cap, 3); return; }
     if (st == 3) { pthread_mutex_lock(&g_qmu); vkDeviceWaitIdle(g_dev); pthread_mutex_unlock(&g_qmu); cap_write(); atomic_store(&g_cap, 0); }
 }
+// Pass times (DM_VK_PASS_TIMES=<present>: that frame, then one a minute; Bug reports → Detailed performance log turns it on): the GPU time of each of the game's passes in
+//   one frame, a timestamp after the work before it and one after it, nothing else changed (the frame capture's copies would skew it). Logged two frames later, the 15
+//   costliest with their size, targets, draws and first shaders: which effect to make cheaper first. Capture passes (transform feedback) are not timed
+enum { PTN = 1024 };
+static VkQueryPool g_ptq; static _Atomic int g_pt; static int g_pt_n, g_pt_open, g_pt_frame_wait; static uint64_t g_pt_frame;
+static struct { uint32_t w, h, cfmt, dfmt; int ncol, draws; char vs[17], fs[17]; } g_pt_info[PTN];
+static void pt_pass_begin(void) {   // (outside any pass, before the game pass's rend_begin)
+    if (atomic_load(&g_pt) != 2 || !g_ptq || g_pt_n >= PTN) return;
+    if (!g_pt_n) vkCmdResetQueryPool(CB(), g_ptq, 0, 2 * PTN);
+    vkCmdWriteTimestamp(CB(), VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g_ptq, (uint32_t)g_pt_n * 2);
+    g_pt_info[g_pt_n].w = P.tw; g_pt_info[g_pt_n].h = P.th; g_pt_info[g_pt_n].ncol = P.ncolor; g_pt_info[g_pt_n].cfmt = P.cfmt[0]; g_pt_info[g_pt_n].dfmt = P.dfmt;
+    g_pt_info[g_pt_n].draws = 0; g_pt_info[g_pt_n].vs[0] = g_pt_info[g_pt_n].fs[0] = 0; g_pt_open = 1;
+}
+static void pt_pass_end(void) {     // (after rend_end)
+    if (!g_pt_open) return; g_pt_open = 0;
+    vkCmdWriteTimestamp(CB(), VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g_ptq, (uint32_t)g_pt_n * 2 + 1); g_pt_n++;
+}
+static void pt_draw(void) {
+    if (!g_pt_open) return; int i = g_pt_n; g_pt_info[i].draws++;
+    if (!g_pt_info[i].fs[0] && S.prog) { vprog *cp = prog_get(S.prog); if (cp && cp->sh[0]) { snprintf(g_pt_info[i].vs, 17, "%s", cp->sh[0]->key); snprintf(g_pt_info[i].fs, 17, "%s", cp->sh[1] ? cp->sh[1]->key : "-"); } }
+}
+static void pt_present(uint64_t n) {
+    static long at = -2; if (at == -2) { const char *e = getenv("DM_VK_PASS_TIMES"), *pr = getenv("DM_PERF_REPORT"); at = e ? atol(e) : pr && atoi(pr) > 0 ? 600 : -1; if (at == 0) at = 600; }
+    if (at < 0) return;
+    int st = atomic_load(&g_pt);
+    if (st == 0 && ((long)n == at || ((long)n > at && (n - (uint64_t)at) % 3600 == 0))) {
+        if (!g_ptq) { if (!g_props.limits.timestampComputeAndGraphics) { VLOG("pass times: this GPU has no timestamps"); at = -1; return; }
+            VkQueryPoolCreateInfo qi = { .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = 2 * PTN };
+            if (vkCreateQueryPool(g_dev, &qi, NULL, &g_ptq)) { g_ptq = VK_NULL_HANDLE; at = -1; return; } }
+        g_pt_n = 0; g_pt_frame = n + 1; atomic_store(&g_pt, 2); return; }
+    if (st == 2) { atomic_store(&g_pt, 3); g_pt_frame_wait = 2; return; }
+    if (st == 3 && g_pt_frame_wait-- <= 0) {
+        int np = g_pt_n; atomic_store(&g_pt, 0); if (!np) return;
+        static uint64_t t[2 * PTN]; double ms[PTN], tot = 0; int ord[PTN];
+        if (vkGetQueryPoolResults(g_dev, g_ptq, 0, 2 * (uint32_t)np, sizeof t, t, 8, VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) != VK_SUCCESS) { VLOG("pass times: results not readable"); return; }
+        for (int i = 0; i < np; i++) { ms[i] = t[2 * i + 1] > t[2 * i] ? (t[2 * i + 1] - t[2 * i]) * (double)g_props.limits.timestampPeriod / 1e6 : 0; tot += ms[i]; ord[i] = i; }
+        for (int i = 0; i < np; i++) for (int j = i + 1; j < np; j++) if (ms[ord[j]] > ms[ord[i]]) { int x = ord[i]; ord[i] = ord[j]; ord[j] = x; }
+        VLOG("pass times (frame %llu): %d passes, %.2f ms of GPU in them; the costliest:", (unsigned long long)g_pt_frame, np, tot);
+        for (int k = 0; k < np && k < 15; k++) { int i = ord[k];
+            VLOG("  #%d %ux%u, %d colour (vk %u), depth vk %u, %d draws, vertex %s fragment %s: %.3f ms (%.1f %%)", i, g_pt_info[i].w, g_pt_info[i].h, g_pt_info[i].ncol, g_pt_info[i].cfmt,
+                 g_pt_info[i].dfmt, g_pt_info[i].draws, g_pt_info[i].vs[0] ? g_pt_info[i].vs : "-", g_pt_info[i].fs[0] ? g_pt_info[i].fs : "-", ms[i], tot > 0 ? 100 * ms[i] / tot : 0); }
+    }
+}
 static int P_tf;   // the open pass is transform feedback captures' (tf_pass_begin), not the game's
 static struct { uint64_t lo, hi; } g_tfw[64]; static int g_ntfw;   // what the captures in the open capture pass wrote
 static void ubd_flush(void);
 static int g_nubd;
-static void pass_end(void) { g_rt_stale = 0; if (P.open) { rend_end(CB()); P.open = 0;
+static void pass_end(void) { g_rt_stale = 0; if (P.open) { rend_end(CB()); P.open = 0; pt_pass_end();
     if (!P_tf && P.hd) sk_ro_note(P.dkey, P.dwrote, 0);
     if (!P_tf && P.hs) sk_ro_note(P.skey, P.swrote, 0);
     g_after_pass = !P_tf; g_bar_clean = 0;
@@ -3054,6 +3105,7 @@ static int pass_begin(void) {
     uint64_t pt2 = prof ? mono_ns() : 0;
     VkRenderingInfo ri = { .sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, {tw, th}}, .layerCount = nlay ? nlay : 1, .colorAttachmentCount = (uint32_t)ncol, .pColorAttachments = ca,
                            .pDepthAttachment = P.hd ? &da : NULL, .pStencilAttachment = P.hs ? &sa : NULL };
+    pt_pass_begin();   // (DM_VK_PASS_TIMES)
     rend_begin(CB(), &ri, P.cfmt, P.hd ? P.dfmt : P.hs ? P.sfmt : 0, P.samples, 0); g_stat_begins++;
     if (prof) { uint64_t pt3 = mono_ns(); g_pb_ns[0] += pt1 - pt0; g_pb_ns[1] += pt2 - pt1; g_pb_ns[2] += pt3 - pt2; }
     {   // a pass onto exactly the attachments of the one a target change just ended (the same views, size and layers): one that could have gone on (g_pass_samev)
@@ -3794,6 +3846,7 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
     S.blend[0] = b;
 }
 static void draw_one(const p_draw *dw, const p_draw_idx *di) {
+    if (g_pt_open) pt_draw();
     if (atomic_load(&g_cap) == 2) { g_cap_draws++;
         if (g_cap_draws <= 3 && S.prog) { vprog *cp = prog_get(S.prog); if (cp && cp->sh[0]) cap_printf("  draw %d: vertex %s fragment %s\n", g_cap_draws, cp->sh[0]->key, cp->sh[1] ? cp->sh[1]->key : "-"); } }
     if (atomic_load(&g_cap) == 2 && g_cap_dp < 2) { draw_(dw, di, NULL); cap_draw_values(); return; }
@@ -5230,7 +5283,7 @@ _Atomic uint64_t g_nvn_game_work_avg_ns;   // its average over about 16 frames (
 uint64_t mtl_present(const tex_t *t, double period_s, const int crop[4]) {
     if (sk_on()) { vtex *px = tex_res(t); if (px) { pthread_mutex_lock(&g_skmu); px->presented = 1; pthread_mutex_unlock(&g_skmu); sk_read(px); } }   // shown: never skips its stores
     uint64_t n = atomic_fetch_add(&g_present_n, 1) + 1;
-    cap_present(n);
+    cap_present(n); pt_present(n);
     // the heap route's crash marker goes after 20 s of play on it: 600 presents, or 20 s of wall time and 60 presents (a hot Xclipse 530 building 2,000 pipelines on the
     //   way into Motostoke drew about 300 frames in a minute; the player closed it as stuck, the marker stayed, and the next start took the mirrored route and crashed, #74)
     { static uint64_t t0; if (g_heap_pending && !t0) t0 = mono_ns();
