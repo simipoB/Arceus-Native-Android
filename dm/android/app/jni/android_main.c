@@ -1875,7 +1875,8 @@ static void load_report(const thr_snap *a, int na, const thr_snap *b, int nb, ui
     for (int k = 0; k < 8 && top[k].d; k++) { const thr_snap *t = &b[top[k].i];
         fprintf(stderr, "[cpu]   %-16s tid %d: %.2f s CPU (%.0f %% of a core), core %d (%.2f GHz)\n", t->name, t->tid, (double)top[k].d / hz, 100.0 * (double)top[k].d / hz / secs, t->cpu, core_max_khz(t->cpu) / 1e6); }
 }
-// A load profiled (DM_LOAD_PROF, on unless "0"; fable-loads.md I3 / I4): while a load runs, up to LP_SLOTS threads are sampled 1000 times a second of their own
+// A load profiled (DM_LOAD_PROF=1; off by default since v0.100: Arceus Native v0.99 closed at start with it on, and only DM_LOAD_PROF=0 let it start;
+//   fable-loads.md I3 / I4): while a load runs, up to LP_SLOTS threads are sampled 1000 times a second of their own
 //   CPU time (a SIGPROF timer aimed at each thread): the replay thread (hle_nvn.c dm-replay) and the game's main thread (g_game_tid; getpid() was the Java UI
 //   thread) from the start, then each thread load_boost's pass finds at a quarter of a core or more. A sample in a game module keeps its pc and lr only (in game
 //   code x29 need not be a frame pointer, and a bad read would land in the crash handler); in host code the frame-pointer chain follows (the engine keeps frame
@@ -1904,7 +1905,7 @@ static void lp_sig(int sig, siginfo_t *si, void *ucv) {
     g_lp[i].nf = nf;
 }
 static timer_t g_lp_timer[LP_SLOTS]; static int g_lp_ntimer; static uint64_t g_lp_t0[LP_SLOTS];
-static int lp_on(void) { static int on = -1; if (on < 0) { const char *e = getenv("DM_LOAD_PROF"); on = !(e && !strcmp(e, "0")); } return on; }
+static int lp_on(void) { static int on = -1; if (on < 0) { const char *e = getenv("DM_LOAD_PROF"); on = e && *e && strcmp(e, "0") != 0; } return on; }
 static void lp_add(int tid) {   // one more thread sampled (load_prof's start, load_boost's pass); only while a profile runs, at most LP_SLOTS
     if (!tid || !atomic_load(&g_lp_on) || g_lp_ntimer >= LP_SLOTS) return;
     for (int k = 0; k < g_lp_ntimer; k++) if (atomic_load(&g_lp_tid[k]) == tid) return;
