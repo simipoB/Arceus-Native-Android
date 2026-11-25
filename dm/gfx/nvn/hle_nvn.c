@@ -1257,7 +1257,9 @@ static int report_interval(int real) {
     int k = r == 1000 ? reported_hold() : 0; return k > 0 ? k : real;
 }
 NVN(nvnWindowGetPresentInterval, int, const NVNwindow *w) { return report_interval(((const win_t *)w)->interval); }   // Link's Awakening reads it back every frame
+void dm_step_trace_interval(int v) __attribute__((weak));   // (hle_steptrace.c: DM_STEP_TRACE=1 keeps every interval the game sets)
 NVN(nvnWindowSetPresentInterval, void, NVNwindow *w, int v) {   // (with the game's call site: the function that picks its frame rate, for a high-frame-rate patch)
+    if (dm_step_trace_interval) dm_step_trace_interval(v);
     if (((win_t *)w)->interval != v) { void *lr = __builtin_return_address(0); module_t *m = module_of(lr);
         if (m) LOG("[nvn] the game sets present interval %d → %d (called from %s+%#llx)", ((win_t *)w)->interval, v, m->name, (unsigned long long)((uint8_t *)lr - m->base));
         else LOG("[nvn] the game sets present interval %d → %d", ((win_t *)w)->interval, v); }
@@ -1567,6 +1569,7 @@ static _Atomic uint64_t g_itv2_since;   // start of the game's current run of in
 __attribute__((weak)) uint8_t *dm_fps_state;   // loader.c; graphics unit tests have no loader
 __attribute__((weak)) void dm_fps_lock_tick(void) {}   // hle_fpslock.c: engine frame limits in game memory (Monster Hunter Rise); graphics unit tests have no host
 __attribute__((weak)) void dm_res_scale_tick(void) {}   // hle_resscale.c: an engine's 3D render scale in game memory, capped by the front end (Pokémon Sword / Shield)
+__attribute__((weak)) void dm_step_trace_present(uint64_t sync_ns, uint64_t acq_ns) { (void)sync_ns; (void)acq_ns; }   // hle_steptrace.c: DM_STEP_TRACE=1, Sword / Shield's own frame measure (S-0)
 static int fps_step_cap(void) {
     if (!dm_fps_state) return 0;
     uint32_t b = __atomic_load_n((uint32_t *)dm_fps_state, __ATOMIC_RELAXED); float t; memcpy(&t, &b, sizeof t);
@@ -1810,7 +1813,7 @@ static uint64_t present_hold(uint64_t period, uint64_t *grid) {
 NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     NVN_WHERE();
     (void)q; win_t *o = (win_t *)w; o->presents++;
-    dm_fps_lock_tick(); dm_res_scale_tick();
+    dm_fps_lock_tick(); dm_res_scale_tick(); dm_step_trace_present(t_sync_ns, t_acq_ns);
     if (dm_fps_state) { static int was; int c = fps_step_cap(); if (c != was) { LOG("[nvn] frame step cap %d → %d fps at present %llu%s", was, c, (unsigned long long)o->presents, c == 30 && was == 60 ? " (prerendered movie)" : ""); was = c; } }
     { extern void dm_fps_tick(void) __attribute__((weak)); if (dm_fps_tick) dm_fps_tick(); }   // (loader.c: the 60 fps patch deferred to a field area goes in)
     if (fstep_on()) fstep_tick(o); else if (vstep_on()) vstep_tick(o); else if (dyn_on()) dyn_tick(o);

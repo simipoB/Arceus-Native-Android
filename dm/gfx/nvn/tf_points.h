@@ -57,7 +57,7 @@ fail:
 }
 // The capture's pass: its n targets, rows x TFP_W of them; what was in them is overwritten, after the last repack has read it
 static void tfp_pass_begin(int n, uint32_t rows) {
-    pass_end(); memset(&P, 0, sizeof P); P_tf = 1; g_bar_clean = g_after_pass = 0;
+    pass_end(); if (g_nlc) lc_out_all(); memset(&P, 0, sizeof P); P_tf = 1; g_bar_clean = g_after_pass = 0;   // (a kept depth clear written out first: nvn_vk.c lc_out_all)
     VkCommandBuffer cb = CB(); VkImageMemoryBarrier ib[4]; VkRenderingAttachmentInfo ca[4]; uint32_t cf[4];
     for (int b = 0; b < n; b++) {
         ib[b] = (VkImageMemoryBarrier){ .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER, .srcAccessMask = VK_ACCESS_SHADER_READ_BIT, .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
