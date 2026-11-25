@@ -1894,6 +1894,11 @@ int dm_module_info(int i, const char **name, const char **build);
 void *module_of(const void *p);   // loader.c (lock-free: reads the module table)
 static void lp_sig(int sig, siginfo_t *si, void *ucv) {
     (void)sig; (void)si; if (!atomic_load(&g_lp_on)) return;
+    // On the thread's alternate stack only (SA_ONSTACK; every guest thread has one, crash.c crash_thread_init): patch_nso.py's stubs park two registers in the
+    //   16 bytes below sp without moving it (a red zone Apple has, Linux does not), and a signal frame pushed on the game's own stack overwrites them. That was
+    //   Arceus Native v0.99 closing at start (18,250 TLS-read + 16,080 x18 stub sites in its main). Rule: any signal aimed at a game thread needs SA_ONSTACK.
+    //   A thread without an alternate stack ends the profile here (the frame is already pushed, but no more come)
+    { stack_t cur; if (sigaltstack(NULL, &cur) || !(cur.ss_flags & SS_ONSTACK)) { if (module_of((void *)(uintptr_t)((ucontext_t *)ucv)->uc_mcontext.pc)) { atomic_store(&g_lp_on, 0); return; } } }
     ucontext_t *uc = ucv; int t = (int)gettid(), who = -1; for (int k = 0; k < LP_SLOTS; k++) if (atomic_load(&g_lp_tid[k]) == t) { who = k; break; }
     if (who < 0) return;
     int i = atomic_fetch_add(&g_lp_n, 1); if (i >= LP_N) return;
@@ -1957,7 +1962,7 @@ static void load_prof(int start) {
     extern int nvn_rq_tid(void) __attribute__((weak));
     if (start) {
         if (atomic_load(&g_lp_on)) return;
-        static int installed; if (!installed) { installed = 1; struct sigaction sa; memset(&sa, 0, sizeof sa); sa.sa_sigaction = lp_sig; sa.sa_flags = SA_SIGINFO | SA_RESTART; sigemptyset(&sa.sa_mask); sigaction(SIGPROF, &sa, NULL); }
+        static int installed; if (!installed) { installed = 1; struct sigaction sa; memset(&sa, 0, sizeof sa); sa.sa_sigaction = lp_sig; sa.sa_flags = SA_SIGINFO | SA_RESTART | SA_ONSTACK; sigemptyset(&sa.sa_mask); sigaction(SIGPROF, &sa, NULL); }
         for (int k = 0; k < LP_SLOTS; k++) atomic_store(&g_lp_tid[k], 0);
         atomic_store(&g_lp_n, 0); g_lp_ntimer = 0; atomic_store(&g_lp_on, 1);
         lp_add(nvn_rq_tid ? nvn_rq_tid() : 0); lp_add((int)g_game_tid); return;
