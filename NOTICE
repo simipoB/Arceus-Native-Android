@@ -15,3 +15,7 @@ released under the MIT License; that notice (LICENSE-MIT) stays with them and st
 Third-party code under dm/third_party keeps its own license.
 
 Lossless Scaling is not included: frame generation uses the Lossless.dll the player supplies from their own copy.
+
+Additional terms under section 7 of the GPL apply to the maintainer's own code from 2026-11-25 on: modified versions must be
+marked as unofficial and must not claim to be the official Arceus Native build or to be signed with the project's release key, and
+no rights to the names "Arceus Native" or "Galar Native" are given. The full text and what it covers are in ADDITIONAL-TERMS.md.

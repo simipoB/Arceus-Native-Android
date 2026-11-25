@@ -110,7 +110,7 @@ Import a mod `.zip` (`romfs/` file replacements, `exefs/*.pchtxt` code patches f
 
 ## License
 
-Arceus Native is free software under the **GNU General Public License, version 3 or later** ([LICENSE](LICENSE), [NOTICE](NOTICE)): you may use, share and change it, and anything you distribute that is based on it must be under the same license with its source available. The code that came from d2r-mobile / nxnative, and the engine's code from before the switch, also stay under their original [MIT notice](LICENSE-MIT). Lossless Scaling is not included: its frame generation uses the `Lossless.dll` from your own copy.
+Arceus Native is free software under the **GNU General Public License, version 3 or later** ([LICENSE](LICENSE), [NOTICE](NOTICE)): you may use, share and change it, and anything you distribute that is based on it must be under the same license with its source available. The code that came from d2r-mobile / nxnative, and the engine's code from before the switch, also stay under their original [MIT notice](LICENSE-MIT). [Additional terms](ADDITIONAL-TERMS.md) (GPL section 7) apply to the maintainer's code from 2026-11-25 on: a modified build must say it is unofficial and must not claim to be the official build or to be signed with the project's release key. Official builds come only from this repository's [releases](https://github.com/simipoB/Arceus-Native-Android/releases). Lossless Scaling is not included: its frame generation uses the `Lossless.dll` from your own copy.
 
 ## Credits
 
